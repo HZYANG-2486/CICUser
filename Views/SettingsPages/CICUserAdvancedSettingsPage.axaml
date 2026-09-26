@@ -1,0 +1,530 @@
+<ci:SettingsPageBase x:Class="CICUser.Views.SettingsPages.CICUserAdvancedSettingsPage"
+      xmlns="https://github.com/avaloniaui"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+      xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+      xmlns:ci="http://classisland.tech/schemas/xaml/core"
+      mc:Ignorable="d">
+
+    <ci:SettingsPageBase.Styles>
+        <!-- 折叠分区：默认收起，降低首屏压迫感 -->
+        <Style Selector="Expander">
+            <Setter Property="Margin" Value="0,0,0,12"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        </Style>
+
+        <Style Selector="TextBlock.fieldLabel">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Opacity" Value="0.75"/>
+            <Setter Property="Margin" Value="0,0,0,5"/>
+        </Style>
+
+        <Style Selector="TextBlock.hint">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Opacity" Value="0.6"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+
+        <Style Selector="Border.readout">
+            <Setter Property="Padding" Value="14,10"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}"/>
+        </Style>
+
+        <!-- 警示框：用于设备ID 手动修改等高风险操作 -->
+        <Style Selector="Border.warning">
+            <Setter Property="Padding" Value="14,10"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Background" Value="#FFF4E5"/>
+            <Setter Property="BorderBrush" Value="#F0B429"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+
+        <Style Selector="DataGrid">
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+
+        <Style Selector="TextBlock.optionTitle">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+    </ci:SettingsPageBase.Styles>
+
+    <!-- 内容自然撑满，只保留可读性上限 -->
+    <Grid RowDefinitions="Auto,*" Margin="24,16,24,24">
+        <!-- 顶部返回 -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="12" Margin="0,0,0,16">
+            <Button x:Name="BackButton" Content="← 返回" Height="34" Padding="14,0"
+                    Click="BackButton_Click"/>
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="高级设置" FontSize="16" FontWeight="SemiBold"/>
+                <TextBlock Classes="hint" Text="上报频率、课表格式、报文模板与多套配置。修改后请点击底部「保存设置」。"/>
+            </StackPanel>
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel MaxWidth="820" HorizontalAlignment="Left">
+
+                <!-- ══════════ 上报频率（三通道）══════════ -->
+                <Expander Header="上报频率（三种信息独立开关）" IsExpanded="True">
+                    <StackPanel Margin="0,10,0,4" Spacing="16">
+                        <TextBlock Classes="hint"
+                                   Text="状态、课表、心跳三条通道各自独立，可分别关闭或设置发送间隔。心跳仅用于保活，不依赖课表状态，服务端据此判断设备是否在线。"/>
+
+                        <!-- 总开关 -->
+                        <Border Classes="readout">
+                            <StackPanel Spacing="8">
+                                <CheckBox x:Name="AutoSendCheckBox" Content="启用自动上报（总开关）"
+                                          Click="StrategyCheckBox_Click"/>
+                                <TextBlock Classes="hint" Text="关闭后三条定时通道全部停止，仅「立即上报」按钮与自动化行动仍可用。"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- ① 状态通道 -->
+                        <StackPanel Spacing="8">
+                            <CheckBox x:Name="StatusSendCheckBox" Content="① 状态上报"
+                                      Click="StrategyCheckBox_Click"/>
+                            <StackPanel Orientation="Horizontal" Spacing="12" Margin="24,0,0,0">
+                                <TextBlock Classes="fieldLabel" Text="间隔（秒）"
+                                           VerticalAlignment="Center" Margin="0"/>
+                                <NumericUpDown x:Name="StatusIntervalUpDown" Minimum="5" Maximum="3600"
+                                               Increment="5" FormatString="0" Width="140"/>
+                                <TextBlock Classes="hint" VerticalAlignment="Center"
+                                           Text="最小 5 秒，建议 30 秒。上课/课间状态变化时会另有即时上报。"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- ② 课表通道 -->
+                        <StackPanel Spacing="8">
+                            <CheckBox x:Name="ScheduleSendCheckBox" Content="② 课表上报（定时兜底）"
+                                      Click="StrategyCheckBox_Click"/>
+                            <StackPanel Orientation="Horizontal" Spacing="12" Margin="24,0,0,0">
+                                <TextBlock Classes="fieldLabel" Text="间隔（秒）"
+                                           VerticalAlignment="Center" Margin="0"/>
+                                <NumericUpDown x:Name="ScheduleIntervalUpDown" Minimum="60" Maximum="86400"
+                                               Increment="60" FormatString="0" Width="140"/>
+                                <TextBlock Classes="hint" VerticalAlignment="Center"
+                                           Text="最小 60 秒，建议 1800 秒。课表变更时另有即时上报，与此处无关。"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- ③ 心跳通道 -->
+                        <StackPanel Spacing="8">
+                            <CheckBox x:Name="HeartbeatCheckBox" Content="③ 心跳保活"
+                                      Click="StrategyCheckBox_Click"/>
+                            <StackPanel Orientation="Horizontal" Spacing="12" Margin="24,0,0,0">
+                                <TextBlock Classes="fieldLabel" Text="间隔（秒）"
+                                           VerticalAlignment="Center" Margin="0"/>
+                                <NumericUpDown x:Name="HeartbeatIntervalUpDown" Minimum="10" Maximum="3600"
+                                               Increment="10" FormatString="0" Width="140"/>
+                                <TextBlock Classes="hint" VerticalAlignment="Center"
+                                           Text="最小 10 秒，建议 60 秒。仅发送设备ID 与在线状态。" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Spacing="12" Margin="24,0,0,0">
+                                <TextBlock Classes="fieldLabel" Text="心跳接口路径"
+                                           VerticalAlignment="Center" Margin="0"/>
+                                <TextBox x:Name="HeartbeatEndpointTextBox" Width="280" FontSize="12"
+                                         Watermark="/class/api/heartbeat"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <StackPanel Spacing="8">
+                            <CheckBox x:Name="RealtimeScheduleCheckBox" Content="课表变更时立即上报"
+                                      Click="StrategyCheckBox_Click"/>
+                            <CheckBox x:Name="SkipUnchangedCheckBox" Content="课表内容无变化时跳过上报"
+                                      Click="StrategyCheckBox_Click"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Expander>
+
+                <!-- ══════════ 课表发送格式 ══════════ -->
+                <Expander Header="课表发送格式" IsExpanded="False">
+                    <StackPanel Margin="0,10,0,4" Spacing="14">
+                        <TextBlock Classes="hint"
+                                   Text="选择课表内容在报文中的组织方式。默认的「按节次字典」与旧版本完全一致，升级后无需改动服务端。"/>
+
+                        <StackPanel>
+                            <TextBlock Classes="fieldLabel" Text="格式预设"/>
+                            <ComboBox x:Name="ScheduleFormatComboBox" Width="280"
+                                      HorizontalAlignment="Left"
+                                      SelectionChanged="ScheduleFormatComboBox_SelectionChanged"/>
+                            <TextBlock x:Name="ScheduleFormatDescriptionText" Classes="hint"
+                                       Margin="0,6,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <TextBlock Classes="fieldLabel" Text="节次键前缀"
+                                       VerticalAlignment="Center" Margin="0"/>
+                            <TextBox x:Name="IndexKeyPrefixTextBox" Width="140" FontSize="12"
+                                     Watermark="留空为 1、2、3…"/>
+                            <TextBlock Classes="hint" VerticalAlignment="Center"
+                                       Text="仅「按节次字典」格式生效，如填 L 则键为 L1、L2。"/>
+                        </StackPanel>
+
+                        <TextBlock Classes="fieldLabel" Text="课表项的字段（可自定义键名与取值）"
+                                   FontWeight="SemiBold" Margin="0,6,0,0"/>
+                        <TextBlock Classes="hint" Margin="0,0,0,6"
+                                   Text="决定每节课包含哪些字段。取值可填 Index（节次）、Subject（科目）、Start（开始）、End（结束）、IsChanged（是否换课），或直接写固定文本。"/>
+                        <DataGrid x:Name="ScheduleItemFieldsGrid" Height="150" Margin="0,0,0,8"
+                                  AutoGenerateColumns="False" CanUserReorderColumns="False"
+                                  CanUserResizeColumns="True" IsReadOnly="False"
+                                  GridLinesVisibility="Horizontal" HeadersVisibility="Column"
+                                  CellEditEnded="FieldsGrid_CellEditEnded">
+                            <DataGrid.Columns>
+                                <DataGridCheckBoxColumn Header="启用" Width="50"
+                                                        Binding="{Binding Enabled}"/>
+                                <DataGridTextColumn Header="键名" Width="150" Binding="{Binding Key}"/>
+                                <DataGridTemplateColumn Header="取值来源" Width="110">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding SourceLabel}" VerticalAlignment="Center"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                    <DataGridTemplateColumn.CellEditingTemplate>
+                                        <DataTemplate>
+                                            <ComboBox HorizontalAlignment="Stretch"
+                                                      AttachedToVisualTree="AttachSourceOptions"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellEditingTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTextColumn Header="取值 / 固定文本" Width="*" Binding="{Binding Value}"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button x:Name="AddItemFieldButton" Content="新增字段" Height="30"
+                                    Padding="12,0" Click="AddItemFieldButton_Click"/>
+                            <Button x:Name="RemoveItemFieldButton" Content="删除选中" Height="30"
+                                    Padding="12,0" Click="RemoveItemFieldButton_Click"/>
+                            <Button x:Name="ResetItemFieldsButton" Content="恢复默认字段" Height="30"
+                                    Padding="12,0" Click="ResetItemFieldsButton_Click"/>
+                        </StackPanel>
+
+                        <TextBlock Classes="fieldLabel" Text="格式预览（样例课表）" FontWeight="SemiBold"
+                                   Margin="0,6,0,0"/>
+                        <Border Classes="readout">
+                            <SelectableTextBlock x:Name="ScheduleFormatPreviewText" FontSize="11"
+                                                 FontFamily="Cascadia Mono,Consolas,monospace"
+                                                 TextWrapping="Wrap" MaxHeight="200" Text="{}"/>
+                        </Border>
+                    </StackPanel>
+                </Expander>
+
+                <!-- ══════════ 报文模板 ══════════ -->
+                <Expander Header="报文模板" IsExpanded="False">
+                    <StackPanel Margin="0,10,0,4">
+                        <TextBlock Classes="hint" Margin="0,0,0,14"
+                                   Text="自定义上报报文的字段。取值来源可选运行时变量（自动填充课堂数据）、固定文本或引用全局配置。"/>
+
+                        <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,14">
+                            <TextBlock Classes="fieldLabel" Text="当前模板" VerticalAlignment="Center" Margin="0"/>
+                            <ComboBox x:Name="TemplateComboBox" Width="190"
+                                      SelectionChanged="TemplateComboBox_SelectionChanged"
+                                      DropDownOpened="TemplateComboBox_DropDownOpened"/>
+                            <Button x:Name="SaveTemplateAsButton" Content="另存为" Height="30"
+                                    Padding="12,0" Click="SaveTemplateAsButton_Click"/>
+                            <Button x:Name="DeleteTemplateButton" Content="删除" Height="30"
+                                    Padding="12,0" Click="DeleteTemplateButton_Click"/>
+                            <Button x:Name="ResetTemplateButton" Content="恢复默认" Height="30"
+                                    Padding="12,0" Click="ResetTemplateButton_Click"/>
+                        </StackPanel>
+
+                        <Grid ColumnDefinitions="*,14,*" Margin="0,0,0,14">
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Classes="fieldLabel" Text="状态上报接口路径"/>
+                                <TextBox x:Name="StatusEndpointTextBox" FontSize="12"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Classes="fieldLabel" Text="课表上报接口路径"/>
+                                <TextBox x:Name="ScheduleEndpointTextBox" FontSize="12"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock Classes="fieldLabel" Text="状态报文字段" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <DataGrid x:Name="StatusFieldsGrid" Height="150" Margin="0,0,0,8"
+                                  AutoGenerateColumns="False" CanUserReorderColumns="False"
+                                  CanUserResizeColumns="True" IsReadOnly="False"
+                                  GridLinesVisibility="Horizontal" HeadersVisibility="Column"
+                                  CellEditEnded="FieldsGrid_CellEditEnded">
+                            <DataGrid.Columns>
+                                <DataGridCheckBoxColumn Header="启用" Width="50"
+                                                        Binding="{Binding Enabled}"/>
+                                <DataGridTextColumn Header="字段名" Width="150" Binding="{Binding Key}"/>
+                                <DataGridTemplateColumn Header="取值来源" Width="110">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding SourceLabel}" VerticalAlignment="Center"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                    <DataGridTemplateColumn.CellEditingTemplate>
+                                        <DataTemplate>
+                                            <ComboBox HorizontalAlignment="Stretch"
+                                                      AttachedToVisualTree="AttachSourceOptions"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellEditingTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTextColumn Header="取值" Width="*" Binding="{Binding Value}"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+
+                        <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,16">
+                            <Button x:Name="AddStatusFieldButton" Content="新增字段" Height="30"
+                                    Padding="12,0" Click="AddStatusFieldButton_Click"/>
+                            <Button x:Name="RemoveStatusFieldButton" Content="删除选中" Height="30"
+                                    Padding="12,0" Click="RemoveStatusFieldButton_Click"/>
+                        </StackPanel>
+
+                        <TextBlock Classes="fieldLabel" Text="课表报文字段" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <DataGrid x:Name="ScheduleFieldsGrid" Height="120" Margin="0,0,0,8"
+                                  AutoGenerateColumns="False" CanUserReorderColumns="False"
+                                  CanUserResizeColumns="True" IsReadOnly="False"
+                                  GridLinesVisibility="Horizontal" HeadersVisibility="Column"
+                                  CellEditEnded="FieldsGrid_CellEditEnded">
+                            <DataGrid.Columns>
+                                <DataGridCheckBoxColumn Header="启用" Width="50" Binding="{Binding Enabled}"/>
+                                <DataGridTextColumn Header="字段名" Width="150" Binding="{Binding Key}"/>
+                                <DataGridTemplateColumn Header="取值来源" Width="110">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding SourceLabel}" VerticalAlignment="Center"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                    <DataGridTemplateColumn.CellEditingTemplate>
+                                        <DataTemplate>
+                                            <ComboBox HorizontalAlignment="Stretch"
+                                                      AttachedToVisualTree="AttachSourceOptions"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellEditingTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTextColumn Header="取值" Width="*" Binding="{Binding Value}"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+
+                        <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,16">
+                            <Button x:Name="AddScheduleFieldButton" Content="新增字段" Height="30"
+                                    Padding="12,0" Click="AddScheduleFieldButton_Click"/>
+                            <Button x:Name="RemoveScheduleFieldButton" Content="删除选中" Height="30"
+                                    Padding="12,0" Click="RemoveScheduleFieldButton_Click"/>
+                        </StackPanel>
+
+                        <Grid ColumnDefinitions="Auto,12,*" Margin="0,0,0,14">
+                            <TextBlock Grid.Column="0" Classes="fieldLabel"
+                                       Text="课表字典键名" VerticalAlignment="Center" Margin="0"/>
+                            <TextBox Grid.Column="2" x:Name="ScheduleDataKeyTextBox" FontSize="12"
+                                     Watermark="Schedule"/>
+                        </Grid>
+
+                        <Border x:Name="TemplateValidationBorder" Classes="readout" IsVisible="False"
+                                Margin="0,0,0,12">
+                            <TextBlock x:Name="TemplateValidationText" FontSize="11"
+                                       TextWrapping="Wrap"/>
+                        </Border>
+
+                        <TextBlock Classes="fieldLabel" Text="报文预览" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <Border Classes="readout">
+                            <StackPanel Spacing="8">
+                                <TextBlock Classes="hint" Text="状态报文"/>
+                                <SelectableTextBlock x:Name="StatusPreviewText" FontSize="11"
+                                                     FontFamily="Cascadia Mono,Consolas,monospace"
+                                                     TextWrapping="Wrap" Text="{}"/>
+                                <TextBlock Classes="hint" Text="课表报文"/>
+                                <SelectableTextBlock x:Name="SchedulePreviewText" FontSize="11"
+                                                     FontFamily="Cascadia Mono,Consolas,monospace"
+                                                     TextWrapping="Wrap" MaxHeight="120" Text="{}"/>
+                                <Button x:Name="RefreshPreviewButton" Content="刷新预览"
+                                        Height="28" Padding="12,0" HorizontalAlignment="Left"
+                                        Click="RefreshPreviewButton_Click"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Expander>
+
+                <!-- ══════════ 授权（可选，不强制）══════════ -->
+                <Expander Header="授权检查（可选）" IsExpanded="False">
+                    <StackPanel Margin="0,10,0,4" Spacing="14">
+                        <Border Classes="readout">
+                            <StackPanel Spacing="8">
+                                <CheckBox x:Name="AuthCheckEnabledCheckBox"
+                                          Content="启用授权检查"
+                                          Click="AuthCheckEnabledCheckBox_Click"/>
+                                <TextBlock Classes="hint" TextWrapping="Wrap"
+                                           Text="默认关闭。关闭时插件不做任何授权判断，直接向服务端上报，适用于未实现授权机制的服务端。开启后，只有服务端返回已授权才会发送数据。"/>
+                            </StackPanel>
+                        </Border>
+
+                        <Grid ColumnDefinitions="*,14,*">
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Classes="fieldLabel" Text="授权申请接口路径"/>
+                                <TextBox x:Name="AuthRequestEndpointTextBox" FontSize="12"
+                                         Watermark="/class/api/auth/request"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Classes="fieldLabel" Text="授权查询接口路径"/>
+                                <TextBox x:Name="AuthQueryEndpointTextBox" FontSize="12"
+                                         Watermark="/class/api/auth/query"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock Classes="fieldLabel" Text="授权请求体的字段名（按服务端约定改写）"
+                                   FontWeight="SemiBold"/>
+                        <Grid ColumnDefinitions="*,10,*,10,*">
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Classes="fieldLabel" Text="设备ID"/>
+                                <TextBox x:Name="AuthDeviceIdFieldTextBox" FontSize="12"
+                                         Watermark="DeviceId"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Classes="fieldLabel" Text="设备名称"/>
+                                <TextBox x:Name="AuthDeviceNameFieldTextBox" FontSize="12"
+                                         Watermark="DeviceName"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="4">
+                                <TextBlock Classes="fieldLabel" Text="班级名称"/>
+                                <TextBox x:Name="AuthClassNameFieldTextBox" FontSize="12"
+                                         Watermark="ClassName"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Expander>
+
+                <!-- ══════════ 稳定性与安全性 ══════════ -->
+                <Expander Header="稳定性与安全性" IsExpanded="False">
+                    <StackPanel Margin="0,10,0,4" Spacing="14">
+                        <TextBlock Classes="hint"
+                                   Text="网络异常与安全相关的参数。默认值适用于绝大多数校园内网环境。"/>
+
+                        <Grid ColumnDefinitions="*,14,*">
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Classes="fieldLabel" Text="请求超时（秒）"/>
+                                <NumericUpDown x:Name="TimeoutUpDown" Minimum="3" Maximum="120"
+                                               Increment="1" FormatString="0" Width="140"
+                                               HorizontalAlignment="Left"/>
+                                <TextBlock Classes="hint" Margin="0,4,0,0" Text="范围 3–120 秒，默认 15。"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Classes="fieldLabel" Text="失败重试次数"/>
+                                <NumericUpDown x:Name="RetryUpDown" Minimum="0" Maximum="5"
+                                               Increment="1" FormatString="0" Width="140"
+                                               HorizontalAlignment="Left"/>
+                                <TextBlock Classes="hint" Margin="0,4,0,0"
+                                           Text="范围 0–5，默认 2。采用指数退避，避免加重服务端负担。"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <Border Classes="readout">
+                            <StackPanel Spacing="8">
+                                <CheckBox x:Name="MaskSensitiveCheckBox"
+                                          Content="日志中隐藏设备ID 与服务器地址"/>
+                                <TextBlock Classes="hint" TextWrapping="Wrap"
+                                           Text="开启后日志中的敏感字段以掩码显示（如 709-709CI-A3F8 → 709-7***-A3F8），便于分享日志排查问题。"/>
+
+                                <CheckBox x:Name="AllowInsecureHttpCheckBox"
+                                          Content="允许使用明文 HTTP 地址"/>
+                                <TextBlock x:Name="InsecureHttpWarningText" Classes="hint"
+                                           TextWrapping="Wrap"
+                                           Text="校园内网常以 http:// 提供服务，明文传输存在被窃听的风险。若服务端支持 https://，建议改用加密地址。"/>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Classes="fieldLabel" Text="当前日志文件" FontWeight="SemiBold"
+                                   Margin="0,6,0,0"/>
+                        <Border Classes="readout">
+                            <StackPanel Spacing="8">
+                                <SelectableTextBlock x:Name="LogPathText" FontSize="11"
+                                                     FontFamily="Cascadia Mono,Consolas,monospace"
+                                                     TextWrapping="Wrap" Text="—"/>
+                                <TextBlock Classes="hint" TextWrapping="Wrap"
+                                           Text="日志自动轮转，单文件上限 1 MB，最多保留 3 份历史。"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Expander>
+
+                <!-- ══════════ 多套配置 ══════════ -->
+                <Expander Header="多套配置" IsExpanded="False">
+                    <StackPanel Margin="0,10,0,4">
+                        <TextBlock Classes="hint" Margin="0,0,0,14"
+                                   Text="可保存多套配置用于不同教室快速切换，也可导出为文件批量分发到其它设备。"/>
+
+                        <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,14">
+                            <TextBlock Classes="fieldLabel" Text="当前配置" VerticalAlignment="Center" Margin="0"/>
+                            <ComboBox x:Name="ProfileComboBox" Width="190"/>
+                            <Button x:Name="ApplyProfileButton" Content="应用" Height="30"
+                                    Padding="12,0" Click="ApplyProfileButton_Click"/>
+                            <Button x:Name="SaveProfileButton" Content="保存为配置" Height="30"
+                                    Padding="12,0" Click="SaveProfileButton_Click"/>
+                            <Button x:Name="RemoveProfileButton" Content="删除配置" Height="30"
+                                    Padding="12,0" Click="RemoveProfileButton_Click"/>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button x:Name="ExportConfigButton" Content="导出配置到文件" Height="30"
+                                    Padding="12,0" Click="ExportConfigButton_Click"/>
+                            <Button x:Name="ImportConfigButton" Content="从文件导入配置" Height="30"
+                                    Padding="12,0" Click="ImportConfigButton_Click"/>
+                            <Button x:Name="OpenConfigFolderButton" Content="打开配置目录" Height="30"
+                                    Padding="12,0" Click="OpenConfigFolderButton_Click"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Expander>
+
+                <!-- ══════════ 设备ID 高级 ══════════ -->
+                <Expander Header="设备ID 高级选项" IsExpanded="False">
+                    <StackPanel Margin="0,10,0,4" Spacing="14">
+                        <StackPanel>
+                            <TextBlock Classes="fieldLabel" Text="生成方式"/>
+                            <ComboBox x:Name="DeviceIdSourceComboBox" Width="280"
+                                      HorizontalAlignment="Left"
+                                      SelectionChanged="DeviceIdSourceComboBox_SelectionChanged"/>
+                            <TextBlock x:Name="SourceDescriptionText" Classes="hint" Margin="0,6,0,0"/>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Button x:Name="RegenerateFromComboButton" Content="按所选方式重新生成"
+                                    Height="32" Padding="14,0" Click="RegenerateFromComboButton_Click"/>
+                        </StackPanel>
+
+                        <!-- 手动修改：高风险，醒目标注 -->
+                        <Border Classes="warning">
+                            <StackPanel>
+                                <TextBlock Text="⚠  手动修改设备ID" FontWeight="SemiBold"
+                                           FontSize="13" Foreground="#8A5300" Margin="0,0,0,6"/>
+                                <TextBlock Classes="hint" Foreground="#8A5300" Margin="0,0,0,12"
+                                           Text="设备ID 用于让服务端识别本机。修改后服务端会将其视为一台全新设备，需要重新申请授权；若与原设备重复，两边的数据会互相覆盖。除非确有需要，否则请使用上面的自动生成方式。"/>
+
+                                <Grid ColumnDefinitions="*,10,Auto">
+                                    <TextBox Grid.Column="0" x:Name="ManualDeviceIdTextBox"
+                                             FontFamily="Cascadia Mono,Consolas,monospace"
+                                             Watermark="手动输入设备ID"/>
+                                    <Button Grid.Column="2" x:Name="ApplyManualDeviceIdButton"
+                                            Content="确认修改" Height="34" Padding="14,0"
+                                            Click="ApplyManualDeviceIdButton_Click"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Expander>
+
+                <!-- 底部操作与提示 -->
+                <StackPanel Spacing="10" Margin="0,14,0,0">
+                    <Border x:Name="MessageBorder" Padding="14,10" CornerRadius="6" IsVisible="False">
+                        <TextBlock x:Name="MessageText" FontSize="12" TextWrapping="Wrap"/>
+                    </Border>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Button x:Name="SaveButton" Content="保存设置" Height="36" Padding="20,0"
+                                Click="SaveButton_Click" Classes="accent"/>
+                        <Button x:Name="UndoButton" Content="撤回上一步" Height="36" Padding="18,0"
+                                Click="UndoButton_Click"/>
+                        <Button x:Name="ResetAllButton" Content="恢复默认" Height="36" Padding="18,0"
+                                Click="ResetAllButton_Click"/>
+                        <Button x:Name="OpenLogButton" Content="查看日志" Height="36" Padding="18,0"
+                                Click="OpenLogButton_Click"/>
+                    </StackPanel>
+                    <TextBlock x:Name="UndoHintText" Classes="hint"
+                               Text="「撤回上一步」可回退最近的改动（最多 20 步）；「恢复默认」会把本页所有设置还原为出厂状态。"/>
+                </StackPanel>
+
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</ci:SettingsPageBase>

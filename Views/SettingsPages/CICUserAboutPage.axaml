@@ -1,0 +1,275 @@
+<ci:SettingsPageBase x:Class="CICUser.Views.SettingsPages.CICUserAboutPage"
+      xmlns="https://github.com/avaloniaui"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+      xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+      xmlns:ci="http://classisland.tech/schemas/xaml/core"
+      mc:Ignorable="d">
+
+    <ci:SettingsPageBase.Styles>
+        <!-- 分组卡片 -->
+        <Style Selector="Border.card">
+            <Setter Property="Padding" Value="20"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundAltHighBrush}"/>
+            <Setter Property="Margin" Value="0,0,0,18"/>
+        </Style>
+
+        <!-- 分组标题 -->
+        <Style Selector="TextBlock.sectionTitle">
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+        </Style>
+
+        <!-- 字段标签 -->
+        <Style Selector="TextBlock.fieldLabel">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Opacity" Value="0.75"/>
+            <Setter Property="Margin" Value="0,0,0,5"/>
+        </Style>
+
+        <!-- 辅助文字 -->
+        <Style Selector="TextBlock.hint">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Opacity" Value="0.6"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+
+        <!-- 只读展示框 -->
+        <Style Selector="Border.readout">
+            <Setter Property="Padding" Value="14,10"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}"/>
+        </Style>
+
+        <!-- 键值行：左键右值 -->
+        <Style Selector="TextBlock.kvKey">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Opacity" Value="0.75"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+
+        <Style Selector="TextBlock.kvValue">
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+
+        <!-- 可复制的等宽路径文本 -->
+        <Style Selector="SelectableTextBlock.mono">
+            <Setter Property="FontFamily" Value="Consolas,Menlo,DejaVu Sans Mono,monospace"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+    </ci:SettingsPageBase.Styles>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24,16,24,24">
+        <StackPanel MaxWidth="820" HorizontalAlignment="Left">
+
+            <!-- ══════════ 标题区 ══════════ -->
+            <Border Classes="card">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <TextBlock x:Name="AppNameText" Text="CICUser"
+                                   FontSize="24" FontWeight="Bold" VerticalAlignment="Center"/>
+                        <Border Classes="readout" Padding="10,4" VerticalAlignment="Center">
+                            <TextBlock x:Name="VersionBadgeText" Text="v1.0.0.0"
+                                       FontSize="12" FontWeight="SemiBold"/>
+                        </Border>
+                    </StackPanel>
+
+                    <TextBlock Classes="hint" Margin="0,10,0,0" TextWrapping="Wrap"
+                               Text="一个支持自定义的课表与状态发送器"/>
+                </StackPanel>
+            </Border>
+
+            <!-- ══════════ 简介与用途 ══════════ -->
+            <Border Classes="card">
+                <StackPanel>
+                    <TextBlock Classes="sectionTitle" Text="这是什么"/>
+                    <TextBlock Classes="hint" Margin="0,0,0,14" TextWrapping="Wrap"
+                               Text="CICUser 是一个 ClassIsland 插件：把教室电脑上的「当前课堂状态」与「当日课表」实时上报到你自建的服务端，供走廊大屏、电子班牌、教务看板等场景展示。"/>
+
+                    <TextBlock Classes="sectionTitle" Text="它能做什么"/>
+                    <StackPanel Spacing="7">
+                        <TextBlock Classes="hint" TextWrapping="Wrap"
+                                   Text="• 状态上报 —— 按设定间隔上报当前科目、时段、课堂状态、下一科目与剩余时间。"/>
+                        <TextBlock Classes="hint" TextWrapping="Wrap"
+                                   Text="• 课表上报 —— 启动时上报当日完整课表；检测到换课、调课、启用状态或时间轴改动时立即重传最新版本。"/>
+                        <TextBlock Classes="hint" TextWrapping="Wrap"
+                                   Text="• 心跳保活 —— 只上报设备是否在线，不依赖课表是否处于上课状态，用于判断设备存活。"/>
+                        <TextBlock Classes="hint" TextWrapping="Wrap"
+                                   Text="• 自由配置 —— 报文模板、课表格式、接口路径、字段名均可按你的服务端约定调整。"/>
+                        <TextBlock Classes="hint" TextWrapping="Wrap"
+                                   Text="• 自动化触发 —— 提供「上报课堂状态与课表」行动，可在自动化流程中随时手动触发一次上报。"/>
+                    </StackPanel>
+
+                    <TextBlock Classes="sectionTitle" Text="三条上报通道" Margin="0,16,0,6"/>
+                    <Grid ColumnDefinitions="*,*,*" ColumnSpacing="10">
+                        <Border Grid.Column="0" Classes="readout">
+                            <StackPanel>
+                                <TextBlock Classes="fieldLabel" Text="① 状态" Margin="0"/>
+                                <TextBlock x:Name="AboutStatusChannelText" Classes="kvValue" Text="已启用"/>
+                                <TextBlock x:Name="AboutStatusChannelHint" Classes="hint" Margin="0,3,0,0"
+                                           Text="每 30 秒"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="1" Classes="readout">
+                            <StackPanel>
+                                <TextBlock Classes="fieldLabel" Text="② 课表" Margin="0"/>
+                                <TextBlock x:Name="AboutScheduleChannelText" Classes="kvValue" Text="已启用"/>
+                                <TextBlock x:Name="AboutScheduleChannelHint" Classes="hint" Margin="0,3,0,0"
+                                           Text="每 1800 秒"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="2" Classes="readout">
+                            <StackPanel>
+                                <TextBlock Classes="fieldLabel" Text="③ 心跳" Margin="0"/>
+                                <TextBlock x:Name="AboutHeartbeatChannelText" Classes="kvValue" Text="已启用"/>
+                                <TextBlock x:Name="AboutHeartbeatChannelHint" Classes="hint" Margin="0,3,0,0"
+                                           Text="每 60 秒"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- ══════════ 版本与构建信息 ══════════ -->
+            <Border Classes="card">
+                <StackPanel>
+                    <TextBlock Classes="sectionTitle" Text="版本与构建信息"/>
+
+                    <StackPanel Spacing="9">
+                        <Grid ColumnDefinitions="170,*">
+                            <TextBlock Grid.Column="0" Classes="kvKey" Text="插件版本"/>
+                            <TextBlock Grid.Column="1" Classes="kvValue" x:Name="PluginVersionText" Text="—"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="170,*">
+                            <TextBlock Grid.Column="0" Classes="kvKey" Text="插件 ID"/>
+                            <SelectableTextBlock Grid.Column="1" Classes="mono" x:Name="PluginIdText" Text="—"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="170,*">
+                            <TextBlock Grid.Column="0" Classes="kvKey" Text="插件 API 版本"/>
+                            <TextBlock Grid.Column="1" Classes="kvValue" x:Name="ApiVersionText" Text="—"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="170,*">
+                            <TextBlock Grid.Column="0" Classes="kvKey" Text="目标框架"/>
+                            <TextBlock Grid.Column="1" Classes="kvValue" x:Name="TargetFrameworkText" Text="—"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="170,*">
+                            <TextBlock Grid.Column="0" Classes="kvKey" Text="构建时间"/>
+                            <TextBlock Grid.Column="1" Classes="kvValue" x:Name="BuildTimeText" Text="—"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="170,*">
+                            <TextBlock Grid.Column="0" Classes="kvKey" Text="宿主版本"/>
+                            <TextBlock Grid.Column="1" Classes="kvValue" x:Name="HostVersionText" Text="—"/>
+                        </Grid>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- ══════════ 运行环境与路径 ══════════ -->
+            <Border Classes="card">
+                <StackPanel>
+                    <TextBlock Classes="sectionTitle" Text="运行环境与路径"/>
+                    <TextBlock Classes="hint" Margin="0,0,0,14"
+                               Text="以下为当前设备上的实际位置，可选中复制。/ 可用于排查问题时提供给维护人员。"/>
+
+                    <TextBlock Classes="fieldLabel" Text="配置文件"/>
+                    <Border Classes="readout" Margin="0,0,0,12">
+                        <SelectableTextBlock Classes="mono" x:Name="ConfigPathText" Text="—"/>
+                    </Border>
+
+                    <TextBlock Classes="fieldLabel" Text="日志文件"/>
+                    <Border Classes="readout" Margin="0,0,0,12">
+                        <SelectableTextBlock Classes="mono" x:Name="LogPathText" Text="—"/>
+                    </Border>
+
+                    <TextBlock Classes="fieldLabel" Text="数据目录"/>
+                    <Border Classes="readout" Margin="0,0,0,14">
+                        <SelectableTextBlock Classes="mono" x:Name="DataDirPathText" Text="—"/>
+                    </Border>
+
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Button x:Name="OpenLogButton" Content="打开日志"
+                                Height="36" Padding="18,0" Click="OpenLogButton_Click"/>
+                        <Button x:Name="OpenConfigFolderButton" Content="打开数据目录"
+                                Height="36" Padding="18,0" Click="OpenConfigFolderButton_Click"/>
+                        <Button x:Name="CopyInfoButton" Content="复制环境信息"
+                                Height="36" Padding="18,0" Click="CopyInfoButton_Click"/>
+                    </StackPanel>
+
+                    <TextBlock Classes="hint" x:Name="CopyHintText" Margin="0,10,0,0"
+                               Text="复制的内容不含设备ID、服务器地址等敏感信息。"/>
+                </StackPanel>
+            </Border>
+
+            <!-- ══════════ 接口与端点一览 ══════════ -->
+            <Border Classes="card">
+                <StackPanel>
+                    <TextBlock Classes="sectionTitle" Text="当前生效的接口"/>
+                    <TextBlock Classes="hint" Margin="0,0,0,14"
+                               Text="路径均可在「高级设置」中调整。若你的平台未提供授权接口，可直接关闭授权检查。"/>
+
+                    <StackPanel Spacing="9">
+                        <Grid ColumnDefinitions="170,*">
+                            <TextBlock Grid.Column="0" Classes="kvKey" Text="状态上报"/>
+                            <SelectableTextBlock Grid.Column="1" Classes="mono" x:Name="EndpointStatusText" Text="—"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="170,*">
+                            <TextBlock Grid.Column="0" Classes="kvKey" Text="课表上报"/>
+                            <SelectableTextBlock Grid.Column="1" Classes="mono" x:Name="EndpointScheduleText" Text="—"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="170,*">
+                            <TextBlock Grid.Column="0" Classes="kvKey" Text="心跳保活"/>
+                            <SelectableTextBlock Grid.Column="1" Classes="mono" x:Name="EndpointHeartbeatText" Text="—"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="170,*">
+                            <TextBlock Grid.Column="0" Classes="kvKey" Text="授权申请"/>
+                            <SelectableTextBlock Grid.Column="1" Classes="mono" x:Name="EndpointAuthRequestText" Text="—"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="170,*">
+                            <TextBlock Grid.Column="0" Classes="kvKey" Text="授权查询"/>
+                            <SelectableTextBlock Grid.Column="1" Classes="mono" x:Name="EndpointAuthQueryText" Text="—"/>
+                        </Grid>
+                    </StackPanel>
+
+                    <TextBlock Classes="hint" x:Name="AuthModeHintText" Margin="0,12,0,0"
+                               Text="授权检查当前为关闭状态，插件将直接开始上报。"/>
+                </StackPanel>
+            </Border>
+
+            <!-- ══════════ 安全与隐私 ══════════ -->
+            <Border Classes="card">
+                <StackPanel>
+                    <TextBlock Classes="sectionTitle" Text="安全与隐私"/>
+                    <TextBlock Classes="hint" Margin="0,0,0,14"
+                               Text="插件只做「按你的配置向你的服务器发送数据」这一件事，不收集、不上传任何第三方信息。"/>
+
+                    <StackPanel Spacing="7">
+                        <TextBlock Classes="hint" TextWrapping="Wrap"
+                                   Text="• 日志脱敏 —— 日志中的服务器地址与设备标识会自动打码（如 https://sc***com）。"/>
+                        <TextBlock Classes="hint" TextWrapping="Wrap"
+                                   Text="• 明文 HTTP 防护 —— 可关闭明文传输；关闭后任何 http:// 请求在发出前即被拦截。"/>
+                        <TextBlock Classes="hint" TextWrapping="Wrap"
+                                   Text="• 超时与重试 —— 请求超时可配，失败按指数退避重试；仅 5xx 与网络故障重试，4xx 不重试。"/>
+                        <TextBlock Classes="hint" TextWrapping="Wrap"
+                                   Text="• 输入校验 —— 地址、间隔、路径、字段名在保存时统一校验并钳制到安全范围。"/>
+                    </StackPanel>
+
+                    <TextBlock Classes="hint" x:Name="MaskStateHintText" Margin="0,12,0,0"
+                               Text="日志脱敏：已开启。"/>
+                </StackPanel>
+            </Border>
+
+            <!-- 底部状态提示条 -->
+            <Border x:Name="MessageBar" Margin="0,0,0,8" Padding="14,10"
+                    CornerRadius="6" IsVisible="False">
+                <TextBlock x:Name="MessageText" FontSize="12" TextWrapping="Wrap"/>
+            </Border>
+
+        </StackPanel>
+    </ScrollViewer>
+</ci:SettingsPageBase>

@@ -1,0 +1,238 @@
+<ci:SettingsPageBase x:Class="CICUser.Views.SettingsPages.CICUserSettingsPage"
+      xmlns="https://github.com/avaloniaui"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+      xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+      xmlns:ci="http://classisland.tech/schemas/xaml/core"
+      mc:Ignorable="d">
+
+    <ci:SettingsPageBase.Styles>
+        <!-- 分组卡片：留出充足呼吸感，靠间距与圆角区分层级 -->
+        <Style Selector="Border.card">
+            <Setter Property="Padding" Value="20"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundAltHighBrush}"/>
+            <Setter Property="Margin" Value="0,0,0,18"/>
+        </Style>
+
+        <!-- 分组标题 -->
+        <Style Selector="TextBlock.sectionTitle">
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+        </Style>
+
+        <!-- 字段标签 -->
+        <Style Selector="TextBlock.fieldLabel">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Opacity" Value="0.75"/>
+            <Setter Property="Margin" Value="0,0,0,5"/>
+        </Style>
+
+        <!-- 字段说明 / 辅助文字 -->
+        <Style Selector="TextBlock.hint">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Opacity" Value="0.6"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+
+        <!-- 只读状态展示框 -->
+        <Style Selector="Border.readout">
+            <Setter Property="Padding" Value="14,10"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}"/>
+        </Style>
+
+        <!-- 授权状态药丸徽标 -->
+        <Style Selector="Border.pill">
+            <Setter Property="Padding" Value="12,5"/>
+            <Setter Property="CornerRadius" Value="11"/>
+        </Style>
+
+        <!-- 统计数字 -->
+        <Style Selector="TextBlock.statValue">
+            <Setter Property="FontSize" Value="20"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+        </Style>
+
+        <!-- 运行指示灯 -->
+        <Style Selector="Ellipse.dot">
+            <Setter Property="Width" Value="9"/>
+            <Setter Property="Height" Value="9"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+    </ci:SettingsPageBase.Styles>
+
+    <!-- 让内容自然撑满设置页内容区，只保留一个可读性上限，避免超宽屏下行长过长 -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24,16,24,24">
+        <StackPanel MaxWidth="820" HorizontalAlignment="Left">
+
+                <!-- ══════════ ① 上报与运行（置顶）══════════ -->
+                <Border Classes="card">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,0,0,6">
+                            <TextBlock Classes="sectionTitle" Text="上报与运行" Margin="0"/>
+                            <Border x:Name="RunningPill" Classes="pill" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" Spacing="7">
+                                    <Ellipse x:Name="RunningDot" Classes="dot"/>
+                                    <TextBlock x:Name="RunningStateText" Text="待机" FontSize="12"
+                                               FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                        <TextBlock Classes="hint" Margin="0,0,0,16"
+                                   Text="三条通道各自独立上报：状态按间隔发送课堂状态，课表在调整时立即重传，心跳用于保活。"/>
+
+                        <!-- 通道开关速览 -->
+                        <Grid ColumnDefinitions="*,*,*" Margin="0,0,0,16">
+                            <Border Grid.Column="0" Classes="readout" Margin="0,0,8,0">
+                                <StackPanel>
+                                    <TextBlock Classes="fieldLabel" Text="① 状态" Margin="0,0,0,4"/>
+                                    <TextBlock x:Name="StatusChannelText" Text="已启用" FontSize="12"
+                                               FontWeight="SemiBold"/>
+                                    <TextBlock x:Name="StatusChannelHint" Classes="hint" Margin="0,3,0,0"
+                                               Text="每 30 秒"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Column="1" Classes="readout" Margin="8,0,8,0">
+                                <StackPanel>
+                                    <TextBlock Classes="fieldLabel" Text="② 课表" Margin="0,0,0,4"/>
+                                    <TextBlock x:Name="ScheduleChannelText" Text="已启用" FontSize="12"
+                                               FontWeight="SemiBold"/>
+                                    <TextBlock x:Name="ScheduleChannelHint" Classes="hint" Margin="0,3,0,0"
+                                               Text="每 1800 秒"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Column="2" Classes="readout" Margin="8,0,0,0">
+                                <StackPanel>
+                                    <TextBlock Classes="fieldLabel" Text="③ 心跳" Margin="0,0,0,4"/>
+                                    <TextBlock x:Name="HeartbeatChannelText" Text="已启用" FontSize="12"
+                                               FontWeight="SemiBold"/>
+                                    <TextBlock x:Name="HeartbeatChannelHint" Classes="hint" Margin="0,3,0,0"
+                                               Text="每 60 秒"/>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+
+                        <!-- 运行统计 -->
+                        <Grid ColumnDefinitions="*,*,*,*" Margin="0,0,0,16">
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Classes="fieldLabel" Text="状态上报次数" Margin="0,0,0,2"/>
+                                <TextBlock x:Name="StatusSendCountText" Classes="statValue" Text="0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Classes="fieldLabel" Text="课表上报次数" Margin="0,0,0,2"/>
+                                <TextBlock x:Name="ScheduleSendCountText" Classes="statValue" Text="0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Classes="fieldLabel" Text="心跳次数" Margin="0,0,0,2"/>
+                                <TextBlock x:Name="HeartbeatSendCountText" Classes="statValue" Text="0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="3">
+                                <TextBlock Classes="fieldLabel" Text="已上报节数" Margin="0,0,0,2"/>
+                                <TextBlock x:Name="LessonCountText" Classes="statValue" Text="—"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock Classes="fieldLabel" Text="最近一次上报结果"/>
+                        <Border Classes="readout" MinHeight="42" Margin="0,0,0,16">
+                            <StackPanel Spacing="4">
+                                <TextBlock x:Name="LastSendResultText" Text="暂无上报记录"
+                                           FontSize="12" TextWrapping="Wrap"/>
+                                <TextBlock x:Name="ScheduleVersionText" Classes="hint" Text="课表版本 —"/>
+                            </StackPanel>
+                        </Border>
+
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Button x:Name="SendNowButton" Content="立即上报"
+                                    Height="36" Padding="18,0" Click="SendNowButton_Click"/>
+                            <Button x:Name="SaveButton" Content="保存设置"
+                                    Height="36" Padding="18,0" Click="SaveButton_Click"
+                                    Classes="accent"/>
+                            <Button x:Name="UndoButton" Content="撤回上一步"
+                                    Height="36" Padding="18,0" Click="UndoButton_Click"/>
+                            <Button x:Name="ResetButton" Content="恢复默认"
+                                    Height="36" Padding="18,0" Click="ResetButton_Click"/>
+                            <Button x:Name="OpenLogButton" Content="查看日志"
+                                    Height="36" Padding="18,0" Click="OpenLogButton_Click"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- ══════════ ② 连接与身份 ══════════ -->
+                <Border Classes="card">
+                    <StackPanel>
+                        <TextBlock Classes="sectionTitle" Text="连接与身份"/>
+                        <TextBlock Classes="hint" Margin="0,0,0,16"
+                                   Text="填写自建服务端地址，并为本机设置一个便于识别的名称。"/>
+
+                        <StackPanel Spacing="14">
+                            <StackPanel>
+                                <TextBlock Classes="fieldLabel" Text="服务器地址（必填）"/>
+                                <TextBox x:Name="ServerUrlTextBox" Watermark="http://192.168.1.10:8080"/>
+                                <TextBlock x:Name="ServerUrlHint" Classes="hint" Margin="0,6,0,0"/>
+                            </StackPanel>
+
+                            <!-- 设备ID：默认只读，避免误改导致服务端识别错乱 -->
+                            <StackPanel>
+                                <TextBlock Classes="fieldLabel" Text="设备ID（自动生成）"/>
+                                <Grid ColumnDefinitions="*,10,Auto">
+                                    <TextBox Grid.Column="0" x:Name="DeviceIdTextBox" IsReadOnly="True"
+                                             FontFamily="Cascadia Mono,Consolas,monospace"/>
+                                    <Button Grid.Column="2" x:Name="RegenerateDeviceIdButton"
+                                            Content="重新生成" Height="34" Padding="14,0"
+                                            Click="RegenerateDeviceIdButton_Click"/>
+                                </Grid>
+                                <TextBlock x:Name="DeviceIdSourceHint" Classes="hint" Margin="0,6,0,0"
+                                           Text="该值由设备硬件标识自动派生，请勿轻易修改。"/>
+                            </StackPanel>
+
+                            <Grid ColumnDefinitions="*,14,*">
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Classes="fieldLabel" Text="设备名称"/>
+                                    <TextBox x:Name="DeviceNameTextBox" Watermark="如：701班电子白板"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Classes="fieldLabel" Text="班级名称"/>
+                                    <TextBox x:Name="ClassNameTextBox" Watermark="如：高一(1)班"/>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- ══════════ ③ 设备授权 ══════════ -->
+                <Border Classes="card">
+                    <StackPanel>
+                        <TextBlock Classes="sectionTitle" Text="设备授权"/>
+                        <TextBlock x:Name="AuthCardHint" Classes="hint" Margin="0,0,0,16"
+                                   Text="首次使用需向服务端申请授权，经管理员批准后方可上报数据。"/>
+
+                        <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,0,0,16">
+                            <TextBlock Classes="fieldLabel" Text="当前状态" VerticalAlignment="Center" Margin="0"/>
+                            <Border x:Name="AuthStatusPill" Classes="pill">
+                                <TextBlock x:Name="AuthStatusText" Text="待授权" FontSize="12" FontWeight="SemiBold"/>
+                            </Border>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Button x:Name="RequestAuthButton" Content="申请授权"
+                                    Height="34" Padding="18,0" Click="RequestAuthButton_Click"/>
+                            <Button x:Name="CheckAuthButton" Content="查询授权结果"
+                                    Height="34" Padding="18,0" Click="CheckAuthButton_Click"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- 底部状态提示条 -->
+                <Border x:Name="MessageBorder" Margin="0,0,0,8" Padding="14,10"
+                        CornerRadius="6" IsVisible="False">
+                    <TextBlock x:Name="MessageText" FontSize="12" TextWrapping="Wrap"/>
+                </Border>
+
+                <TextBlock x:Name="UndoHintText" Classes="hint" Margin="0,4,0,0"
+                           Text="「撤回上一步」可回退最近的改动（最多 20 步）；「恢复默认」会把上报频率等设置还原，但保留服务器地址与设备ID。"/>
+
+        </StackPanel>
+    </ScrollViewer>
+</ci:SettingsPageBase>
