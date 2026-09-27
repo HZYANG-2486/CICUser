@@ -21,7 +21,11 @@ name: .NET
 on:
   push:
     branches: [ "main" ]
-    tags: [ "V*" ]
+    tags:
+      - "[0-9]*"      # 官方规范：a.b.c.d，如 1.0.0.1
+      - "v[0-9]*"     # 兼容手滑打成小写 v
+      - "V[0-9]*"     # 兼容手滑打成大写 V
+
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
