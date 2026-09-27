@@ -1,0 +1,105 @@
+# 基于 GitHub 官方 .NET starter workflow 改造
+#   官方模板：https://docs.github.com/actions/automating-builds-and-tests/building-and-testing-net
+#
+# 相对官方模板的改造：
+#   1. runs-on: ubuntu-latest -> windows-latest
+#      原因：TargetFramework 是 net8.0-windows，Linux runner 编译不了
+#   2. dotnet-version: 6.0.x -> 8.0.x
+#      原因：目标框架是 net8.0，SDK 版本必须匹配
+#   3. 追加打包步骤，产出可安装的 .cipx
+#   4. 追加校验步骤，生成插件市场能识别的 CLASSISLAND_PKG_MD5 注释
+#
+# 关于校验信息（重要）：
+#   ClassIsland 的 ChecksumHelper.ExtractHashInfo 会从 Release 正文里
+#   用正则 <!-- CLASSISLAND_PKG_MD5 (.+?) --> 提取一段 JSON，
+#   再以【工件文件名】为键取出 MD5，最后对该文件整体算 MD5 做比对。
+#   所以注释里的键必须是 CICUser.cipx，值必须是这个 .cipx 的整体 MD5，
+#   而不是包内各个文件的 MD5。
+
+name: .NET
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "V*" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 8.0.x
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Build
+      run: dotnet build --no-restore -c Release
+
+    # 插件 SDK 的 CreateCipx 目标负责打包，输出 cipx/CICUser.cipx
+    # 它同时会生成 cipx/checksums.md（包内各文件的 MD5），但那不是宿主校验用的值
+    - name: Pack cipx
+      run: dotnet publish -c Release -p:CreateCipx=true
+
+    # 计算 .cipx 整体的 MD5 —— 这才是宿主校验的对象
+    - name: Compute checksums
+      id: sums
+      shell: pwsh
+      run: |
+        $path = "cipx/CICUser.cipx"
+        if (-not (Test-Path $path)) { throw "未找到 $path，打包可能失败" }
+
+        $md5    = (Get-FileHash $path -Algorithm MD5).Hash
+        $sha256 = (Get-FileHash $path -Algorithm SHA256).Hash
+        $size   = (Get-Item $path).Length
+
+        "md5=$md5" >> $env:GITHUB_OUTPUT
+        "sha256=$sha256" >> $env:GITHUB_OUTPUT
+        "size=$size" >> $env:GITHUB_OUTPUT
+
+        $json = '{"CICUser.cipx":"' + $md5 + '"}'
+        "marker=<!-- CLASSISLAND_PKG_MD5 $json -->" >> $env:GITHUB_OUTPUT
+
+        Write-Host "MD5    : $md5"
+        Write-Host "SHA256 : $sha256"
+        Write-Host "Size   : $size"
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: CICUser-cipx
+        path: cipx/CICUser.cipx
+        if-no-files-found: error
+
+    - name: Publish Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: cipx/CICUser.cipx
+        body: |
+          ## CICUser ${{ github.ref_name }}
+
+          ### 安装
+
+          下载下方的 `CICUser.cipx`，在 ClassIsland 应用设置找到插件页，从本地文件安装。
+
+          ### 校验信息
+
+          | 文件名 | 大小 | MD5 | SHA256 |
+          | --- | --- | --- | --- |
+          | CICUser.cipx | ${{ steps.sums.outputs.size }} 字节 | `${{ steps.sums.outputs.md5 }}` | `${{ steps.sums.outputs.sha256 }}` |
+
+          ${{ steps.sums.outputs.marker }}
+        draft: false
+        prerelease: false
