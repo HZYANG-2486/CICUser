@@ -8,6 +8,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using Avalonia.VisualTree;
 using ClassIsland.Core.Abstractions.Controls;
 using ClassIsland.Core.Attributes;
 
@@ -67,6 +68,7 @@ public partial class CICUserAdvancedSettingsPage : SettingsPageBase
             LoadTemplateFields();
             RefreshProfileList();
             RefreshDeviceIdSourceList();
+            RefreshAllKeywordLists();
         }
         finally
         {
@@ -100,13 +102,19 @@ public partial class CICUserAdvancedSettingsPage : SettingsPageBase
         SkipUnchangedCheckBox.IsChecked = _settings.SkipUnchangedSchedule;
     }
 
-    /// <summary>回显课表发送格式。</summary>
+    /// <summary>
+    /// 回显课表发送格式。
+    /// </summary>
+    /// <remarks>
+    /// 取值以活动模板的指定为准——旧版协议模板会把格式钉成数组形态，
+    /// 切换模板时应当看到格式跟着变，否则用户会以为协议没切过去。
+    /// </remarks>
     private void LoadScheduleFormatFields()
     {
         var options = ScheduleFormatOption.All;
         ScheduleFormatComboBox.ItemsSource = options;
 
-        var current = ScheduleFormatCatalog.Parse(_settings.ScheduleFormat);
+        var current = _settings.ResolveScheduleFormat();
         ScheduleFormatComboBox.SelectedItem =
             options.FirstOrDefault(x => x.Value == current) ?? options[0];
 
@@ -261,10 +269,56 @@ public partial class CICUserAdvancedSettingsPage : SettingsPageBase
 
         // 用副本绑定，取消编辑时不影响已保存内容
         StatusFieldsGrid.ItemsSource = template.StatusFields.Select(x => x.Clone()).ToList();
-        ScheduleFieldsGrid.ItemsSource = template.ScheduleFields.Select(x => x.Clone()).ToList();
 
+        // 活动模板的「状态半」与「课表半」分别落在 _settings 的两个字段里。
+        // 一旦两者分叉（导入的配置、或只重建了其中一半），
+        // 用同一个 template 对象去填两张表就会把课表那一半显示错，
+        // 并在收集时把真正的课表模板整体覆盖掉。
+        var scheduleSource = IsEditingActiveTemplate(template) && _settings.ScheduleTemplate != null
+            ? _settings.ScheduleTemplate.ScheduleFields
+            : template.ScheduleFields;
+
+        ScheduleFieldsGrid.ItemsSource = scheduleSource.Select(x => x.Clone()).ToList();
+
+        UpdateTemplateFormatHint();
         ValidateTemplate();
     }
+
+    /// <summary>
+    /// 显示当前编辑的模板要求使用的课表格式。
+    /// </summary>
+    /// <remarks>
+    /// 模板下拉只切换编辑对象、不改变生效中的协议，因此光看字段表格
+    /// 分辨不出「默认模板」和「旧版协议」——两者字段完全相同，
+    /// 差别只在课表格式。这行提示就是用来把这个差别摆到明面上的。
+    /// </remarks>
+    private void UpdateTemplateFormatHint()
+    {
+        if (TemplateFormatHint == null)
+        {
+            return;
+        }
+
+        var raw = GetEditingTemplate().ScheduleFormat;
+
+        TemplateFormatHint.Text = string.IsNullOrWhiteSpace(raw)
+            ? "该模板未指定课表格式，跟随「课表发送格式」中的全局设置"
+              + $"（当前为「{ScheduleFormatCatalog.GetDisplayName(_settings.ResolveScheduleFormat())}」）。"
+            : $"该模板指定课表格式为「{ScheduleFormatCatalog.GetDisplayName(ScheduleFormatCatalog.Parse(raw))}」，"
+              + "点「启用」后生效。";
+    }
+
+    /// <summary>
+    /// 判断给定模板是否为当前生效的活动模板。
+    /// </summary>
+    /// <remarks>
+    /// 只有活动模板才需要同步回 <c>_settings</c>；
+    /// 从模板列表里取出来的命名模板是就地编辑的。
+    /// </remarks>
+    private bool IsEditingActiveTemplate(MessageTemplate template)
+        => ReferenceEquals(template, _settings.StatusTemplate)
+           || ReferenceEquals(template, _settings.ScheduleTemplate)
+           || string.Equals(template.Name, _settings.StatusTemplate?.Name, StringComparison.Ordinal);
 
     /// <summary>取得当前正在编辑的模板对象。</summary>
     private MessageTemplate GetEditingTemplate()
@@ -452,6 +506,272 @@ public partial class CICUserAdvancedSettingsPage : SettingsPageBase
         };
     }
 
+    // ── 取值列：可编辑下拉 ──
+
+    /// <summary>
+    /// 为「取值」列的编辑态下拉框挂载候选。
+    /// </summary>
+    /// <remarks>
+    /// 候选内容取决于两件事：该行当前的<b>取值来源</b>，以及该行所在的<b>表格</b>。
+    /// 同一个「Subject」在状态表里是「当前科目」、在课表项表里是「某一节的科目」，
+    /// 所以候选必须按作用域区分。
+    /// <para>
+    /// 这里不做实时联动：数据表格同一时刻只有一个单元格处于编辑态，
+    /// 用户在「取值来源」列改完并提交后再来编辑本列，读到的已是更新后的来源。
+    /// </para>
+    /// </remarks>
+    private void AttachValueOptions(object? sender, VisualTreeAttachmentEventArgs e)
+    {
+        if (sender is not ComboBox combo || combo.ItemsSource != null)
+        {
+            return;
+        }
+
+        if (combo.DataContext is not MessageField field)
+        {
+            return;
+        }
+
+        var scope = ResolveScope(combo.FindAncestorOfType<DataGrid>()) ?? KeywordScope.Status;
+
+        combo.ItemsSource = KeywordOption.FromAll(KeywordCatalog.ForEditor(field.Source, scope));
+        combo.PlaceholderText = BuildValuePlaceholder(field.Source);
+
+        // 同一单元格里的自由输入框。选中候选后要同步刷新它，
+        // 否则 MessageField 没有变更通知，输入框会停留在旧值上。
+        var input = combo.FindAncestorOfType<Grid>()?
+            .GetVisualDescendants().OfType<TextBox>().FirstOrDefault();
+
+        combo.SelectionChanged += (_, _) =>
+        {
+            if (combo.DataContext is not MessageField f || combo.SelectedItem is not KeywordOption option)
+            {
+                return;
+            }
+
+            var descriptor = option.Descriptor;
+
+            if (f.Source == FieldSourceType.Template)
+            {
+                // 模板来源：把占位符并进已有文本，而不是整段替换掉用户写好的内容
+                f.Value = AppendPlaceholder(f.Value, descriptor.Key);
+            }
+            else
+            {
+                f.Value = descriptor.Key;
+            }
+
+            f.ValueType = descriptor.SuggestedValueType;
+
+            if (input != null)
+            {
+                input.Text = f.Value;
+            }
+        };
+    }
+
+    /// <summary>为「值类型」列的编辑态下拉框挂载选项。</summary>
+    private void AttachValueTypeOptions(object? sender, VisualTreeAttachmentEventArgs e)
+    {
+        if (sender is not ComboBox combo || combo.ItemsSource != null)
+        {
+            return;
+        }
+
+        combo.ItemsSource = FieldValueTypeOption.All;
+
+        if (combo.DataContext is MessageField field)
+        {
+            combo.SelectedItem = FieldValueTypeOption.All.FirstOrDefault(x => x.Value == field.ValueType);
+        }
+
+        combo.SelectionChanged += (_, _) =>
+        {
+            if (combo.DataContext is MessageField f && combo.SelectedItem is FieldValueTypeOption opt)
+            {
+                f.ValueType = opt.Value;
+            }
+        };
+    }
+
+    /// <summary>取值输入框的占位提示，按来源给出不同的填写引导。</summary>
+    private static string BuildValuePlaceholder(FieldSourceType source) => source switch
+    {
+        FieldSourceType.Runtime => "从下拉选择运行时变量，或直接输入变量名",
+        FieldSourceType.Global => "从下拉选择配置项",
+        FieldSourceType.Template => "混排文字与变量，如 第{Index}节 {Subject}",
+        _ => "直接输入固定文本"
+    };
+
+    /// <summary>
+    /// 把 <c>{Key}</c> 占位符并入已有模板文本；已存在时不重复追加。
+    /// </summary>
+    private static string AppendPlaceholder(string? current, string key)
+    {
+        var text = current ?? "";
+        var token = "{" + key + "}";
+
+        return text.Contains(token, StringComparison.Ordinal) ? text : text + token;
+    }
+
+    // ── 可用关键字参考面板 ──
+
+    /// <summary>
+    /// 三张字段表格与各自的关键字参考面板的对应关系。
+    /// </summary>
+    private IEnumerable<(string GridName, KeywordScope Scope, ListBox List, TextBox Search)> KeywordPanels()
+    {
+        yield return (nameof(StatusFieldsGrid), KeywordScope.Status,
+            StatusKeywordList, StatusKeywordSearchBox);
+        yield return (nameof(ScheduleFieldsGrid), KeywordScope.Schedule,
+            ScheduleKeywordList, ScheduleKeywordSearchBox);
+        yield return (nameof(ScheduleItemFieldsGrid), KeywordScope.ScheduleItem,
+            ItemKeywordList, ItemKeywordSearchBox);
+    }
+
+    /// <summary>按名字取字段表格。</summary>
+    private DataGrid GridByName(string name) => name switch
+    {
+        nameof(ScheduleFieldsGrid) => ScheduleFieldsGrid,
+        nameof(ScheduleItemFieldsGrid) => ScheduleItemFieldsGrid,
+        _ => StatusFieldsGrid
+    };
+
+    /// <summary>判断字段表格所处的作用域。</summary>
+    private KeywordScope? ResolveScope(DataGrid? grid)
+    {
+        if (ReferenceEquals(grid, StatusFieldsGrid)) return KeywordScope.Status;
+        if (ReferenceEquals(grid, ScheduleFieldsGrid)) return KeywordScope.Schedule;
+        if (ReferenceEquals(grid, ScheduleItemFieldsGrid)) return KeywordScope.ScheduleItem;
+        return null;
+    }
+
+    /// <summary>刷新全部参考面板（搜索框为空时列出该作用域的全部关键字）。</summary>
+    private void RefreshAllKeywordLists()
+    {
+        foreach (var panel in KeywordPanels())
+        {
+            FillKeywordList(panel.GridName, panel.Scope, panel.List, panel.Search?.Text);
+        }
+    }
+
+    private void FillKeywordList(string gridName, KeywordScope scope, ListBox list, string? filter)
+    {
+        if (list == null)
+        {
+            return;
+        }
+
+        IEnumerable<KeywordDescriptor> items = KeywordCatalog.ForScope(scope);
+
+        var keyword = (filter ?? "").Trim();
+        if (keyword.Length > 0)
+        {
+            items = items.Where(x =>
+                x.Key.Contains(keyword, StringComparison.OrdinalIgnoreCase)
+                || x.DisplayName.Contains(keyword, StringComparison.OrdinalIgnoreCase)
+                || x.Description.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+        }
+
+        list.ItemsSource = KeywordOption.FromAll(items);
+    }
+
+    private void KeywordSearchBox_TextChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (_suppressEvents || sender is not TextBox box)
+        {
+            return;
+        }
+
+        // 面板 Border 的 Tag 上写着它服务哪张表格
+        var gridName = box.FindAncestorOfType<Border>()?.Tag as string;
+        if (gridName == null)
+        {
+            return;
+        }
+
+        var panel = KeywordPanels().FirstOrDefault(x => x.GridName == gridName);
+        FillKeywordList(panel.GridName, panel.Scope, panel.List, box.Text);
+    }
+
+    /// <summary>
+    /// 把参考面板中选中的关键字填入表格里当前选中的那一行。
+    /// </summary>
+    /// <remarks>
+    /// 刻意做成「选好再点按钮」而不是「选中即写入」：
+    /// 用户浏览关键字列表是很自然的动作，若一碰就改配置会很难用。
+    /// </remarks>
+    private void InsertKeywordButton_Click(object? sender, RoutedEventArgs e)
+    {
+        var gridName = (sender as Visual)?.FindAncestorOfType<Border>()?.Tag as string;
+        if (gridName == null)
+        {
+            return;
+        }
+
+        var panel = KeywordPanels().FirstOrDefault(x => x.GridName == gridName);
+
+        if (panel.List?.SelectedItem is not KeywordOption option)
+        {
+            ShowMessage("请先在关键字列表里选中一项。", isError: true);
+            return;
+        }
+
+        var grid = GridByName(gridName);
+        if (grid.SelectedItem is not MessageField field)
+        {
+            ShowMessage("请先在左侧表格里点选要填入的那一行。", isError: true);
+            return;
+        }
+
+        PushUndoSnapshot();
+
+        var descriptor = option.Descriptor;
+
+        if (descriptor.Scope == KeywordScope.Global)
+        {
+            // 全局配置项只能走「引用配置」来源
+            field.Source = FieldSourceType.Global;
+            field.Value = descriptor.Key;
+        }
+        else if (field.Source == FieldSourceType.Template)
+        {
+            // 已经是模板插值，就把占位符并进去
+            field.Value = AppendPlaceholder(field.Value, descriptor.Key);
+        }
+        else
+        {
+            field.Source = FieldSourceType.Runtime;
+            field.Value = descriptor.Key;
+        }
+
+        field.ValueType = descriptor.SuggestedValueType;
+
+        RebindGrid(grid);
+        ValidateTemplate();
+        RefreshPreview();
+        RefreshScheduleFormatPreview();
+
+        ShowMessage($"已把「{descriptor.DisplayName}」填入选中行。", isError: false);
+    }
+
+    /// <summary>
+    /// 就地重绑表格数据。
+    /// </summary>
+    /// <remarks>
+    /// <see cref="MessageField"/> 没有实现变更通知，直接改属性界面上不会刷新，
+    /// 因此用一份新副本重建列表来强制刷新。副作用是会清空选中行。
+    /// </remarks>
+    private void RebindGrid(DataGrid grid)
+    {
+        if (grid.ItemsSource is not IEnumerable<MessageField> source)
+        {
+            return;
+        }
+
+        grid.ItemsSource = source.Select(x => x.Clone()).ToList();
+    }
+
     // ── 上报频率 ──
 
     private void StrategyCheckBox_Click(object? sender, RoutedEventArgs e)
@@ -525,7 +845,16 @@ public partial class CICUserAdvancedSettingsPage : SettingsPageBase
     {
         if (ScheduleFormatComboBox.SelectedItem is ScheduleFormatOption opt)
         {
-            _settings.ScheduleFormat = opt.Value.ToString();
+            var name = opt.Value.ToString();
+            _settings.ScheduleFormat = name;
+
+            // 同时写进活动课表模板：格式是协议的一部分，模板带着它才能在
+            // 切换模板时整套切换协议。全局那份保留是为了兼容
+            // 「模板未指定格式」的旧配置。
+            if (_settings.ScheduleTemplate != null)
+            {
+                _settings.ScheduleTemplate.ScheduleFormat = name;
+            }
         }
 
         _settings.ScheduleIndexKeyPrefix = (IndexKeyPrefixTextBox.Text ?? "").Trim();
@@ -609,7 +938,10 @@ public partial class CICUserAdvancedSettingsPage : SettingsPageBase
 
             ScheduleFormatPreviewText.Text = ScheduleFormatter.Preview(
                 ScheduleFormatter.CreateSampleSchedule(), format, fields,
-                (IndexKeyPrefixTextBox.Text ?? "").Trim());
+                (IndexKeyPrefixTextBox.Text ?? "").Trim(),
+                // 传入全局配置，否则引用配置的字段在预览里恒为空，
+                // 用户会以为功能坏了
+                _settings.GetGlobalValues());
         }
         catch (Exception ex)
         {
@@ -690,12 +1022,72 @@ public partial class CICUserAdvancedSettingsPage : SettingsPageBase
             ?.Select(x => x.Clone()).ToList() ?? template.ScheduleFields;
 
         // 活动模板需要同步到实际生效的字段
-        if (ReferenceEquals(template, _settings.StatusTemplate) ||
-            template.Name == _settings.StatusTemplate?.Name)
+        if (IsEditingActiveTemplate(template))
         {
             _settings.StatusTemplate = template.Clone();
-            _settings.ScheduleTemplate = template.Clone();
+
+            // 课表模板只更新它的「课表半」，保留原有的状态半。
+            // 原先这里把整份状态模板盖到课表模板上，
+            // 两者一旦分叉，课表模板里那一半独立内容就没了。
+            if (_settings.ScheduleTemplate != null)
+            {
+                _settings.ScheduleTemplate.ScheduleFields =
+                    template.ScheduleFields.Select(x => x.Clone()).ToList();
+            }
+            else
+            {
+                _settings.ScheduleTemplate = template.Clone();
+            }
         }
+    }
+
+    /// <summary>
+    /// 把当前编辑中的模板设为生效模板。
+    /// </summary>
+    /// <remarks>
+    /// 模板下拉只切换「编辑对象」，选中并不会让它生效——编辑与生效分开是有意的，
+    /// 免得用户浏览模板时就顺手改掉了线上协议。但这样一来，
+    /// 保存过的模板（包括内置的旧版协议预设）就没有任何被启用的入口，故补上此按钮。
+    /// <para>
+    /// 启用时会连同模板指定的课表格式一起带过去，因此从「默认模板」
+    /// 切到「旧版协议（数组课表）」是一次点击完成整套协议切换。
+    /// </para>
+    /// </remarks>
+    private void ApplyTemplateButton_Click(object? sender, RoutedEventArgs e)
+    {
+        // 先把编辑区里的字段改动收进模板对象，避免启用的是未落盘的旧内容
+        CollectTemplateFromEditor();
+
+        var clone = GetEditingTemplate().Clone();
+
+        _settings.StatusTemplate = clone;
+        _settings.ScheduleTemplate = clone.Clone();
+
+        // 全局格式同步为新模板解析出的结果。这样即便之后有人把模板里的
+        // 格式清空（改回「跟随全局」），行为也不会突然回退到别的形态。
+        _settings.ScheduleFormat = _settings.ResolveScheduleFormat().ToString();
+        _editingTemplateName = clone.Name;
+
+        _settings.Save();
+        Plugin.ReloadSettings();
+
+        _suppressEvents = true;
+        try
+        {
+            RefreshTemplateList();
+            // 格式与字段都要跟着新模板重刷，否则界面上显示的仍是上一个模板
+            LoadScheduleFormatFields();
+            LoadTemplateIntoEditor();
+        }
+        finally
+        {
+            _suppressEvents = false;
+        }
+
+        RefreshPreview();
+        RefreshScheduleFormatPreview();
+
+        ShowMessage($"已启用模板「{clone.Name}」。", isError: false);
     }
 
     private void SaveTemplateAsButton_Click(object? sender, RoutedEventArgs e)
@@ -842,9 +1234,11 @@ public partial class CICUserAdvancedSettingsPage : SettingsPageBase
     {
         CollectTemplateFromEditor();
         var template = _settings.StatusTemplate ?? MessageTemplate.CreateDefault();
+        var itemFields = (ScheduleItemFieldsGrid.ItemsSource as IEnumerable<MessageField>)?.ToList();
 
         var issues = MessageBuilder.Validate(template, isStatus: true);
-        issues.AddRange(MessageBuilder.Validate(_settings.ScheduleTemplate ?? template, isStatus: false));
+        issues.AddRange(MessageBuilder.Validate(
+            _settings.ScheduleTemplate ?? template, isStatus: false, itemFields));
 
         if (issues.Count == 0)
         {

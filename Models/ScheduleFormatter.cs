@@ -19,7 +19,10 @@ public static class ScheduleFormatCatalog
         (ScheduleFormat.BySubject, "按科目合并",
             "{\"语文\": [{...}], \"数学\": [{...}]}。同一科目的所有节次归到一组，适合按科目统计。"),
         (ScheduleFormat.Flat, "扁平列表",
-            "[{...}, {...}]。不带节次键，纯记录列表，适合直接写入数据库表。")
+            "[{...}, {...}]。不带节次键，纯记录列表，适合直接写入数据库表。"),
+        (ScheduleFormat.ByIndexArray, "按节次数组（旧版协议）",
+            "{\"1\": [\"语文\", \"08:00:00\", \"08:40:00\", \"0\"]}。每节的值按字段顺序排成数组，"
+            + "安全加固之前的版本用的就是这个形态，对接既有服务端时选它。")
     };
 
     /// <summary>预设的中文显示名。</summary>
@@ -86,25 +89,23 @@ public static class ScheduleFormatter
     /// <summary>
     /// 默认的字段定义：与内部中间表示一一对应。
     /// </summary>
-    public static List<MessageField> CreateDefaultItemFields() => new()
-    {
-        new() { Key = "Subject",   Source = FieldSourceType.Runtime, Value = "Subject",   Enabled = true },
-        new() { Key = "Start",     Source = FieldSourceType.Runtime, Value = "Start",     Enabled = true },
-        new() { Key = "End",       Source = FieldSourceType.Runtime, Value = "End",       Enabled = true },
-        new() { Key = "IsChanged", Source = FieldSourceType.Runtime, Value = "IsChanged", Enabled = true }
-    };
+    /// <remarks>
+    /// 与 <see cref="MessageField.CreateScheduleItemDefaults"/> 内容一致，
+    /// 这里转发过去以避免两处各维护一份、改动时漏掉一边。
+    /// </remarks>
+    public static List<MessageField> CreateDefaultItemFields()
+        => MessageField.CreateScheduleItemDefaults();
 
     /// <summary>
     /// 课表项可用的运行时变量名（供界面下拉与校验）。
     /// </summary>
-    public static readonly (string Key, string Label)[] ItemVariables =
-    {
-        ("Index",     "节次（序号）"),
-        ("Subject",   "科目名称"),
-        ("Start",     "开始时间"),
-        ("End",       "结束时间"),
-        ("IsChanged", "是否换课")
-    };
+    /// <remarks>
+    /// 由 <see cref="KeywordCatalog"/> 投影而来，不再单独维护一份。
+    /// </remarks>
+    public static (string Key, string Label)[] ItemVariables { get; } =
+        KeywordCatalog.ForScope(KeywordScope.ScheduleItem)
+            .Select(x => (x.Key, x.DisplayName))
+            .ToArray();
 
     /// <summary>
     /// 把内部中间表示转换为最终的课表结构，供直接写入报文。
@@ -113,19 +114,24 @@ public static class ScheduleFormatter
     /// <param name="format">目标格式预设。</param>
     /// <param name="itemFields">字段级自定义定义；为空时使用默认字段。</param>
     /// <param name="indexKeyPrefix">按节次字典格式下的键名前缀。</param>
+    /// <param name="globalValues">
+    /// 全局配置项，供课表项字段引用。传 null 时按空处理，
+    /// 此时引用全局配置的字段得到空串——与改造前的行为一致。
+    /// </param>
     /// <returns>可直接序列化为 JSON 的对象。</returns>
     public static object Convert(
         IReadOnlyDictionary<string, string[]> schedule,
         ScheduleFormat format,
         IReadOnlyList<MessageField>? itemFields = null,
-        string? indexKeyPrefix = null)
+        string? indexKeyPrefix = null,
+        IReadOnlyDictionary<string, string>? globalValues = null)
     {
         if (schedule == null || schedule.Count == 0)
         {
             // 空课表也要保持结构类型一致：字典给对象，列表给空数组
             return format is ScheduleFormat.Array or ScheduleFormat.Flat
                 ? new List<object>()
-                : new Dictionary<string, object>();
+                : new Dictionary<string, object?>();
         }
 
         var fields = ResolveFields(itemFields);
@@ -137,12 +143,15 @@ public static class ScheduleFormatter
             .OrderBy(x => x.Index)
             .ToList();
 
+        var globals = globalValues ?? ResolutionContext.EmptyGlobal;
+
         return format switch
         {
-            ScheduleFormat.Array => BuildArray(ordered, fields),
-            ScheduleFormat.Flat => BuildFlat(ordered, fields),
-            ScheduleFormat.BySubject => BuildBySubject(ordered, fields),
-            _ => BuildByIndex(ordered, fields, prefix)
+            ScheduleFormat.Array => BuildArray(ordered, fields, globals),
+            ScheduleFormat.Flat => BuildFlat(ordered, fields, globals),
+            ScheduleFormat.BySubject => BuildBySubject(ordered, fields, globals),
+            ScheduleFormat.ByIndexArray => BuildByIndexArray(ordered, fields, prefix, globals),
+            _ => BuildByIndex(ordered, fields, prefix, globals)
         };
     }
 
@@ -159,16 +168,78 @@ public static class ScheduleFormatter
         return enabled is { Count: > 0 } ? enabled : CreateDefaultItemFields();
     }
 
-    /// <summary>「按节次字典」：{"1": {...}, "2": {...}}。</summary>
-    private static Dictionary<string, object> BuildByIndex(
+    /// <summary>
+    /// 「按节次数组」：{"1": [值, 值, …], "2": [值, 值, …]}。
+    /// </summary>
+    /// <remarks>
+    /// 安全加固之前的版本使用的形态，保留它以便对接既有服务端。
+    /// 与 <see cref="BuildByIndex"/> 的区别只在于每节的值是数组而不是对象。
+    /// </remarks>
+    private static Dictionary<string, object?> BuildByIndexArray(
         List<(int Index, string Raw, string[] Values)> ordered,
         List<MessageField> fields,
-        string prefix)
+        string prefix,
+        IReadOnlyDictionary<string, string> globals)
     {
-        var result = new Dictionary<string, object>(StringComparer.Ordinal);
+        var result = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (var item in ordered)
         {
-            result[$"{prefix}{item.Index}"] = BuildItem(item.Index, item.Values, fields);
+            result[$"{prefix}{item.Index}"] = BuildItemArray(item.Index, item.Values, fields, globals);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 把一节课的字段取值按顺序排成数组。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 数组元素没有键名，所以元素的含义完全由字段的<b>声明顺序</b>决定——
+    /// 默认字段顺序 <c>[Subject, Start, End, IsChanged]</c> 正好对应旧版协议的
+    /// <c>[科目, 开始, 结束, 是否换课]</c>。用户调整字段顺序即调整数组顺序。
+    /// </para>
+    /// <para>
+    /// 与 <see cref="BuildItemFromFields"/> 不同，这里<b>不注入</b>节次字段：
+    /// 数组形态下节次已经由外层字典的键表达了，再塞一个元素反而不符旧协议。
+    /// </para>
+    /// </remarks>
+    private static List<object?> BuildItemArray(
+        int index,
+        string[] values,
+        List<MessageField> fields,
+        IReadOnlyDictionary<string, string> globals)
+    {
+        var runtime = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["Index"] = index,
+            ["Subject"] = GetValue(values, FieldSubject),
+            ["Start"] = GetValue(values, FieldStart),
+            ["End"] = GetValue(values, FieldEnd),
+            ["IsChanged"] = GetValue(values, FieldIsChanged)
+        };
+
+        var context = new ResolutionContext
+        {
+            RuntimeValues = runtime,
+            GlobalValues = globals,
+            Scope = KeywordScope.ScheduleItem
+        };
+
+        return fields.Select(f => ValueResolver.Resolve(f, context, out _)).ToList();
+    }
+
+    /// <summary>「按节次字典」：{"1": {...}, "2": {...}}。</summary>
+    private static Dictionary<string, object?> BuildByIndex(
+        List<(int Index, string Raw, string[] Values)> ordered,
+        List<MessageField> fields,
+        string prefix,
+        IReadOnlyDictionary<string, string> globals)
+    {
+        var result = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var item in ordered)
+        {
+            result[$"{prefix}{item.Index}"] = BuildItem(item.Index, item.Values, fields, globals);
         }
 
         return result;
@@ -177,9 +248,12 @@ public static class ScheduleFormatter
     /// <summary>「数组」：每节课一个对象，节次作为普通字段。</summary>
     private static List<object> BuildArray(
         List<(int Index, string Raw, string[] Values)> ordered,
-        List<MessageField> fields)
+        List<MessageField> fields,
+        IReadOnlyDictionary<string, string> globals)
     {
-        return ordered.Select(item => (object)BuildItem(item.Index, item.Values, fields)).ToList();
+        return ordered
+            .Select(item => (object)BuildItem(item.Index, item.Values, fields, globals))
+            .ToList();
     }
 
     /// <summary>
@@ -188,10 +262,12 @@ public static class ScheduleFormatter
     /// </summary>
     private static List<object> BuildFlat(
         List<(int Index, string Raw, string[] Values)> ordered,
-        List<MessageField> fields)
+        List<MessageField> fields,
+        IReadOnlyDictionary<string, string> globals)
     {
         return ordered
-            .Select(item => (object)BuildItemFromFields(item.Index, item.Values, fields, injectIndex: false))
+            .Select(item => (object)BuildItemFromFields(
+                item.Index, item.Values, fields, injectIndex: false, globals))
             .ToList();
     }
 
@@ -199,11 +275,12 @@ public static class ScheduleFormatter
     /// 「按科目合并」：{科目: [ {...}, {...} ]}。
     /// 同一科目的多个节次归入同一数组，科目名作为一级键。
     /// </summary>
-    private static Dictionary<string, object> BuildBySubject(
+    private static Dictionary<string, object?> BuildBySubject(
         List<(int Index, string Raw, string[] Values)> ordered,
-        List<MessageField> fields)
+        List<MessageField> fields,
+        IReadOnlyDictionary<string, string> globals)
     {
-        var result = new Dictionary<string, object>(StringComparer.Ordinal);
+        var result = new Dictionary<string, object?>(StringComparer.Ordinal);
         var order = new List<string>();
 
         foreach (var item in ordered)
@@ -224,12 +301,12 @@ public static class ScheduleFormatter
             if (bucket is List<object> list)
             {
                 // 按科目合并时保留节次字段，否则同一科目多次出现无法区分是哪一节
-                list.Add(BuildItem(item.Index, item.Values, fields));
+                list.Add(BuildItem(item.Index, item.Values, fields, globals));
             }
         }
 
         // 按首次出现顺序重排，保证输出稳定
-        var sorted = new Dictionary<string, object>(StringComparer.Ordinal);
+        var sorted = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (var key in order)
         {
             sorted[key] = result[key];
@@ -242,9 +319,10 @@ public static class ScheduleFormatter
     /// 构建单项。默认注入节次字段（键名 <c>Index</c>），
     /// 便于服务端在数组/合并格式下仍能定位到具体节次。
     /// </summary>
-    private static Dictionary<string, object> BuildItem(
-        int index, string[] values, List<MessageField> fields)
-        => BuildItemFromFields(index, values, fields, injectIndex: true);
+    private static Dictionary<string, object?> BuildItem(
+        int index, string[] values, List<MessageField> fields,
+        IReadOnlyDictionary<string, string> globals)
+        => BuildItemFromFields(index, values, fields, injectIndex: true, globals);
 
     /// <summary>
     /// 按字段定义构建单项。
@@ -253,54 +331,49 @@ public static class ScheduleFormatter
     /// <param name="values">内部中间表示的四元组。</param>
     /// <param name="fields">启用的字段定义。</param>
     /// <param name="injectIndex">是否注入节次字段。</param>
-    private static Dictionary<string, object> BuildItemFromFields(
+    /// <param name="globals">全局配置项，供课表项字段引用。</param>
+    private static Dictionary<string, object?> BuildItemFromFields(
         int index,
         string[] values,
         List<MessageField> fields,
-        bool injectIndex)
+        bool injectIndex,
+        IReadOnlyDictionary<string, string> globals)
     {
-        var item = new Dictionary<string, object>(StringComparer.Ordinal);
+        var item = new Dictionary<string, object?>(StringComparer.Ordinal);
 
         if (injectIndex)
         {
             item["Index"] = index;
         }
 
+        // 课表项的运行时变量来自四元组与节次序号。
+        // 键名与 KeywordCatalog 里 ScheduleItem 作用域的登记保持一致。
+        var runtime = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["Index"] = index,
+            ["Subject"] = GetValue(values, FieldSubject),
+            ["Start"] = GetValue(values, FieldStart),
+            ["End"] = GetValue(values, FieldEnd),
+            ["IsChanged"] = GetValue(values, FieldIsChanged)
+        };
+
+        var context = new ResolutionContext
+        {
+            RuntimeValues = runtime,
+            GlobalValues = globals,
+            Scope = KeywordScope.ScheduleItem
+        };
+
         foreach (var field in fields)
         {
-            item[field.Key] = ResolveFieldValue(field, index, values);
+            var value = ValueResolver.Resolve(field, context, out _);
+
+            // 课表项的键名同样支持点号路径，保持与报文模板一致的能力。
+            // 写入失败意味着与先前的字段构成结构冲突，按「先到者胜」跳过即可。
+            NestedObjectBuilder.Set(item, field.Key, value, out _);
         }
 
         return item;
-    }
-
-    /// <summary>
-    /// 解析单个字段的取值。
-    /// Source 为 Runtime 时按内置变量名取值，Fixed 时取字面量，
-    /// Global 在课表项中无意义（没有全局配置上下文），返回空串。
-    /// </summary>
-    private static object ResolveFieldValue(MessageField field, int index, string[] values)
-    {
-        if (field.Source == FieldSourceType.Fixed)
-        {
-            return field.Value ?? "";
-        }
-
-        if (field.Source == FieldSourceType.Global)
-        {
-            // 课表项内部不支持引用全局配置，保持结构完整返回空串
-            return "";
-        }
-
-        return (field.Value ?? "").Trim() switch
-        {
-            "Index" => index,
-            "Subject" => GetValue(values, FieldSubject),
-            "Start" => GetValue(values, FieldStart),
-            "End" => GetValue(values, FieldEnd),
-            "IsChanged" => GetValue(values, FieldIsChanged),
-            _ => ""
-        };
     }
 
     /// <summary>安全取数组元素，越界时返回空串。</summary>
@@ -314,13 +387,19 @@ public static class ScheduleFormatter
     /// <summary>
     /// 生成课表格式的可读预览（缩进 JSON），供设置页展示。
     /// </summary>
+    /// <param name="schedule">内部中间表示。</param>
+    /// <param name="format">目标格式预设。</param>
+    /// <param name="itemFields">字段级自定义定义。</param>
+    /// <param name="indexKeyPrefix">按节次字典格式下的键名前缀。</param>
+    /// <param name="globalValues">全局配置项，供课表项字段引用。</param>
     public static string Preview(
         IReadOnlyDictionary<string, string[]> schedule,
         ScheduleFormat format,
         IReadOnlyList<MessageField>? itemFields = null,
-        string? indexKeyPrefix = null)
+        string? indexKeyPrefix = null,
+        IReadOnlyDictionary<string, string>? globalValues = null)
     {
-        var converted = Convert(schedule, format, itemFields, indexKeyPrefix);
+        var converted = Convert(schedule, format, itemFields, indexKeyPrefix, globalValues);
         return System.Text.Json.JsonSerializer.Serialize(converted, new System.Text.Json.JsonSerializerOptions
         {
             WriteIndented = true,

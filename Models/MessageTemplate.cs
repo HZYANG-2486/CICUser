@@ -9,6 +9,10 @@ namespace CICUser;
 /// <summary>
 /// 报文字段的值来源类型。
 /// </summary>
+/// <remarks>
+/// <b>枚举按数字持久化</b>（工程内没有配置 <c>JsonStringEnumConverter</c>），
+/// 因此新增成员<b>必须追加在末尾</b>，插在中间会让旧配置里的数字落到别的语义上。
+/// </remarks>
 public enum FieldSourceType
 {
     /// <summary>运行时自动填充（科目、状态等动态数据）。</summary>
@@ -18,7 +22,46 @@ public enum FieldSourceType
     Fixed,
 
     /// <summary>引用全局配置项（设备ID、班级名称等）。</summary>
-    Global
+    Global,
+
+    /// <summary>
+    /// 模板插值：字面量与变量混排，如 <c>{ClassName}-第{Index}节</c>。
+    /// </summary>
+    /// <remarks>
+    /// 单独作为一种来源，而不是让 <see cref="Fixed"/> 顺带支持插值——
+    /// 后者会改变旧配置的输出：原本作为纯文本的 <c>{</c> 会被解释成占位符起点。
+    /// </remarks>
+    Template
+}
+
+/// <summary>
+/// 字段输出的 JSON 类型。
+/// </summary>
+/// <remarks>
+/// 同样按数字持久化，新增成员追加在末尾。
+/// </remarks>
+public enum FieldValueType
+{
+    /// <summary>
+    /// 原样输出，不做类型转换。默认值，也是既有版本的行为。
+    /// </summary>
+    /// <remarks>
+    /// 字符串来源输出字符串；运行时变量里本身是数字的（如节数、版本号）
+    /// 仍然输出数字。旧配置读入后即为此值，输出与改造前逐字节一致。
+    /// </remarks>
+    Auto,
+
+    /// <summary>强制输出为字符串。</summary>
+    Text,
+
+    /// <summary>输出为数字。</summary>
+    Number,
+
+    /// <summary>输出为布尔值。</summary>
+    Boolean,
+
+    /// <summary>把内容当作 JSON 原样嵌入，可用来塞入数组或对象。</summary>
+    RawJson
 }
 
 /// <summary>
@@ -33,7 +76,18 @@ public static class FieldSourceTypeExtensions
         FieldSourceType.Runtime => "运行时变量",
         FieldSourceType.Fixed => "固定文本",
         FieldSourceType.Global => "引用配置",
+        FieldSourceType.Template => "模板插值",
         _ => source.ToString()
+    };
+
+    /// <summary>取值来源的一句话说明，供界面提示。</summary>
+    public static string ToDescription(this FieldSourceType source) => source switch
+    {
+        FieldSourceType.Runtime => "从「取值」下拉里选一个运行时变量，取值随课堂状态自动变化。",
+        FieldSourceType.Fixed => "「取值」里的内容原样输出，其中的花括号不会被解释。",
+        FieldSourceType.Global => "从「取值」下拉里选一个配置项，如设备ID、班级名称。",
+        FieldSourceType.Template => "在「取值」里混排固定文字与变量，写成 {ClassName}-第{Index}节 这样。",
+        _ => ""
     };
 
     /// <summary>界面下拉框使用的全部可选来源（含中文名）。</summary>
@@ -41,8 +95,69 @@ public static class FieldSourceTypeExtensions
     {
         FieldSourceType.Runtime,
         FieldSourceType.Fixed,
-        FieldSourceType.Global
+        FieldSourceType.Global,
+        FieldSourceType.Template
     };
+}
+
+/// <summary>
+/// 值类型的中文名与说明。
+/// </summary>
+public static class FieldValueTypeExtensions
+{
+    /// <summary>值类型的中文显示名。</summary>
+    public static string ToDisplayName(this FieldValueType type) => type switch
+    {
+        FieldValueType.Auto => "原样",
+        FieldValueType.Text => "文本",
+        FieldValueType.Number => "数字",
+        FieldValueType.Boolean => "布尔",
+        FieldValueType.RawJson => "原始JSON",
+        _ => type.ToString()
+    };
+
+    /// <summary>值类型的一句话说明，供界面提示。</summary>
+    public static string ToDescription(this FieldValueType type) => type switch
+    {
+        FieldValueType.Auto => "不做转换。数字型变量输出数字，其余输出文本。默认项。",
+        FieldValueType.Text => "一律输出为字符串，即使内容是数字。",
+        FieldValueType.Number => "输出为数字。内容不是数字时保留原文本并在校验里提示。",
+        FieldValueType.Boolean => "输出为 true / false。也接受 1 与 0。",
+        FieldValueType.RawJson => "把内容当作 JSON 原样嵌入，可用来发送数组或对象。",
+        _ => ""
+    };
+
+    /// <summary>界面下拉框使用的全部值类型。</summary>
+    public static readonly FieldValueType[] All =
+    {
+        FieldValueType.Auto,
+        FieldValueType.Text,
+        FieldValueType.Number,
+        FieldValueType.Boolean,
+        FieldValueType.RawJson
+    };
+}
+
+/// <summary>
+/// 「值类型」下拉框的选项包装。
+/// </summary>
+public sealed class FieldValueTypeOption
+{
+    /// <summary>对应的枚举值。</summary>
+    public FieldValueType Value { get; init; }
+
+    /// <summary>中文显示名。</summary>
+    public string DisplayName => Value.ToDisplayName();
+
+    /// <summary>供下拉框直接显示的文本。</summary>
+    public override string ToString() => DisplayName;
+
+    /// <summary>由枚举值构造选项。</summary>
+    public static FieldValueTypeOption From(FieldValueType value) => new() { Value = value };
+
+    /// <summary>全部选项，供界面绑定。</summary>
+    public static IReadOnlyList<FieldValueTypeOption> All { get; } =
+        FieldValueTypeExtensions.All.Select(From).ToList();
 }
 
 /// <summary>
@@ -74,9 +189,13 @@ public sealed class FieldSourceOption
 /// <summary>
 /// 课表内容的序列化格式预设。
 /// </summary>
+/// <remarks>
+/// <b>枚举按数字持久化</b>（工程内没有配置 <c>JsonStringEnumConverter</c>），
+/// 新增成员必须追加在末尾。
+/// </remarks>
 public enum ScheduleFormat
 {
-    /// <summary>按节次字典：{"1": [...], "2": [...]}。默认。</summary>
+    /// <summary>按节次字典：{"1": {...}, "2": {...}}。默认。</summary>
     ByIndex,
 
     /// <summary>数组：每节课一个对象，含节次与科目等字段。</summary>
@@ -86,7 +205,16 @@ public enum ScheduleFormat
     BySubject,
 
     /// <summary>扁平列表：每节课一条记录，不带节次键。</summary>
-    Flat
+    Flat,
+
+    /// <summary>
+    /// 按节次数组：{"1": ["语文", "08:00:00", "08:40:00", "0"]}。
+    /// </summary>
+    /// <remarks>
+    /// 安全加固之前的版本使用的就是这个形态，保留它以便对接既有的服务端实现。
+    /// 数组元素没有键名，因此元素的含义由字段的<b>声明顺序</b>决定。
+    /// </remarks>
+    ByIndexArray
 }
 
 /// <summary>
@@ -94,7 +222,14 @@ public enum ScheduleFormat
 /// </summary>
 public class MessageField
 {
-    /// <summary>字段名（报文中的键）。</summary>
+    /// <summary>
+    /// 字段名（报文中的键）。
+    /// </summary>
+    /// <remarks>
+    /// 含点号时会被解释为路径并生成嵌套对象：
+    /// <c>data.device.id</c> 产出 <c>{"data":{"device":{"id":…}}}</c>。
+    /// 需要字面量点号时用反斜杠转义，写作 <c>a\.b</c>。
+    /// </remarks>
     public string Key { get; set; } = "";
 
     /// <summary>取值来源类型。</summary>
@@ -104,12 +239,22 @@ public class MessageField
     /// 取值表达式。
     /// Source 为 Runtime 时填写运行时变量名（如 Subject、State）；
     /// Source 为 Fixed 时填写固定文本；
-    /// Source 为 Global 时填写全局配置键（如 DeviceId、ClassName）。
+    /// Source 为 Global 时填写全局配置键（如 DeviceId、ClassName）；
+    /// Source 为 Template 时填写含 <c>{变量}</c> 占位符的文本。
     /// </summary>
     public string Value { get; set; } = "";
 
     /// <summary>该字段是否启用。</summary>
     public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// 输出值的 JSON 类型。
+    /// </summary>
+    /// <remarks>
+    /// 默认 <see cref="FieldValueType.Auto"/>，即不做转换——
+    /// 这与改造前的行为完全一致，因此旧配置读入后输出逐字节不变。
+    /// </remarks>
+    public FieldValueType ValueType { get; set; } = FieldValueType.Auto;
 
     /// <summary>
     /// 课表内容中每一项的默认字段定义。
@@ -130,6 +275,7 @@ public class MessageField
         FieldSourceType.Runtime => $"运行时变量：{Value}",
         FieldSourceType.Fixed => $"固定值：{Value}",
         FieldSourceType.Global => $"引用配置：{Value}",
+        FieldSourceType.Template => $"模板：{Value}",
         _ => ""
     };
 
@@ -140,12 +286,19 @@ public class MessageField
     [JsonIgnore]
     public string SourceLabel => Source.ToDisplayName();
 
+    /// <summary>「值类型」列只读态的显示文本。</summary>
+    [JsonIgnore]
+    public string ValueTypeLabel => ValueType.ToDisplayName();
+
     public MessageField Clone() => new()
     {
         Key = Key,
         Source = Source,
         Value = Value,
-        Enabled = Enabled
+        Enabled = Enabled,
+        // 新增属性务必一并拷贝：Clone 是界面收集、撤销快照、
+        // 保存配置、切换配置的公共路径，漏一行就会静默丢数据。
+        ValueType = ValueType
     };
 }
 
@@ -172,12 +325,24 @@ public class MessageTemplate
     /// <summary>课表字段中，用于承载课表字典的键名。</summary>
     public string ScheduleDataKey { get; set; } = "Schedule";
 
+    /// <summary>
+    /// 该模板要求使用的课表内容格式预设。
+    /// </summary>
+    /// <remarks>
+    /// 留空表示「跟随全局设置」，此时用主设置里的课表发送格式。
+    /// 之所以让模板也能指定格式，是因为<b>格式本身也是协议的一部分</b>：
+    /// 旧版协议用数组形态，新版用对象形态，只靠字段定义区分不出来。
+    /// 模板里写死格式，切换模板就能整套切换协议，不必再去手动改格式下拉。
+    /// </remarks>
+    public string ScheduleFormat { get; set; } = "";
+
     public MessageTemplate Clone() => new()
     {
         Name = Name,
         StatusEndpoint = StatusEndpoint,
         ScheduleEndpoint = ScheduleEndpoint,
         ScheduleDataKey = ScheduleDataKey,
+        ScheduleFormat = ScheduleFormat,
         StatusFields = StatusFields.Select(x => x.Clone()).ToList(),
         ScheduleFields = ScheduleFields.Select(x => x.Clone()).ToList()
     };
@@ -191,9 +356,46 @@ public class MessageTemplate
         StatusEndpoint = "/class/api/submit",
         ScheduleEndpoint = "/class/api/schedule/update",
         ScheduleDataKey = "Schedule",
+        // 留空表示跟随全局设置，默认即「按节次字典」
+        ScheduleFormat = "",
         StatusFields = CreateDefaultStatusFields(),
         ScheduleFields = CreateDefaultScheduleFields()
     };
+
+    /// <summary>
+    /// 安全加固之前的协议模板。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 与原版本协议的唯一差别在<b>课表内容的形态</b>：
+    /// 旧版是 <c>{"1": ["语文", "08:00:00", "08:40:00", "0"]}</c>，
+    /// 每节的值是数组；加固后的默认改成了带键名的对象。
+    /// </para>
+    /// <para>
+    /// 状态报文与课表报文的顶层字段与默认模板一致，因此这里直接复用默认字段集，
+    /// 只把课表格式钉在 <see cref="CICUser.ScheduleFormat.ByIndexArray"/> 上。
+    /// </para>
+    /// <para>
+    /// 另一处差异是该版本没有心跳通道，但心跳走独立端点、不属于报文模板，
+    /// 需要时在「上报频率」里单独关掉即可。
+    /// </para>
+    /// </remarks>
+    public static MessageTemplate CreateLegacy() => new()
+    {
+        Name = LegacyTemplateName,
+        StatusEndpoint = "/class/api/submit",
+        ScheduleEndpoint = "/class/api/schedule/update",
+        ScheduleDataKey = "Schedule",
+        ScheduleFormat = nameof(CICUser.ScheduleFormat.ByIndexArray),
+        StatusFields = CreateDefaultStatusFields(),
+        ScheduleFields = CreateDefaultScheduleFields()
+    };
+
+    /// <summary>
+    /// 旧版协议内置模板的名称。它是识别该模板的唯一凭据，
+    /// 改名后会被当成普通模板，配置加载时会重新播种一份。
+    /// </summary>
+    public const string LegacyTemplateName = "旧版协议（数组课表）";
 
     /// <summary>
     /// 单独构造默认的状态报文字段集合。
@@ -321,39 +523,31 @@ public class ConfigProfile
 /// <summary>
 /// 运行时可选用的变量名，供界面下拉选择。
 /// </summary>
+/// <remarks>
+/// 这里的条目全部由 <see cref="KeywordCatalog"/> 投影而来。
+/// 改造前它是独立维护的一份列表，与 <c>ScheduleFormatter.ItemVariables</c>
+/// 以及界面里的手写提示三处并存且互不同步，现在统一由目录兜底，
+/// 避免再出现「代码里定义了但界面看不到」的情况。
+/// </remarks>
 public static class RuntimeVariables
 {
     /// <summary>状态报文中可用的运行时变量。</summary>
-    public static readonly (string Key, string Label)[] Status =
-    {
-        ("Subject",       "当前科目"),
-        ("TimeRange",     "时段描述"),
-        ("State",         "课堂状态（OnClass/OffClass）"),
-        ("NextSubject",   "下一科目"),
-        ("RemainingTime", "剩余时间"),
-        ("SendTime",      "发送时间"),
-        ("ClassPlanName", "当前课表名称"),
-        ("ChangedClass",  "是否为换课（true/false）")
-    };
+    public static (string Key, string Label)[] Status { get; } =
+        Project(KeywordScope.Status);
 
     /// <summary>课表报文中可用的运行时变量。</summary>
-    public static readonly (string Key, string Label)[] Schedule =
-    {
-        ("Schedule",   "当日课表字典"),
-        ("Date",       "日期（yyyy-MM-dd）"),
-        ("LessonCount","课程节数"),
-        ("Version",    "课表版本号"),
-        ("UpdateTime", "课表更新时间")
-    };
+    public static (string Key, string Label)[] Schedule { get; } =
+        Project(KeywordScope.Schedule);
 
     /// <summary>可引用的全局配置键。</summary>
-    public static readonly (string Key, string Label)[] Global =
-    {
-        ("DeviceId",   "设备ID"),
-        ("DeviceName", "设备名称"),
-        ("ClassName",  "班级名称"),
-        ("ServerUrl",  "服务器地址")
-    };
+    public static (string Key, string Label)[] Global { get; } =
+        Project(KeywordScope.Global);
+
+    /// <summary>按作用域投影为「键名 + 中文名」列表。</summary>
+    private static (string Key, string Label)[] Project(KeywordScope scope)
+        => KeywordCatalog.ForScope(scope)
+            .Select(x => (x.Key, x.DisplayName))
+            .ToArray();
 }
 
 /// <summary>
@@ -372,31 +566,60 @@ public static class MessageBuilder
     /// 全局配置从 <paramref name="globalValues"/> 取值，固定值直接写入。
     /// 任一取值失败时用空字符串兜底，保证报文结构始终完整。
     /// </summary>
+    /// <remarks>
+    /// 字段名含点号时会生成嵌套对象；同一路径重复出现时后写覆盖，
+    /// 结构冲突（某键既是普通字段又要当对象容器）时先到者胜。
+    /// 课表字典在最后注入，因此它与普通字段同路径时以课表字典为准。
+    /// </remarks>
+    /// <param name="fields">字段定义集合。</param>
+    /// <param name="runtimeValues">运行时变量。</param>
+    /// <param name="globalValues">全局配置项。</param>
+    /// <param name="scope">字段所处作用域，用于取值与校验。</param>
+    /// <param name="dataKey">课表字典的键名，可含点号路径。</param>
+    /// <param name="dataValue">课表字典内容，整体注入。</param>
+    /// <param name="issues">构建过程中收集到的问题，可为 null。</param>
     public static string Build(
         IEnumerable<MessageField> fields,
         IReadOnlyDictionary<string, object?> runtimeValues,
         IReadOnlyDictionary<string, string> globalValues,
+        KeywordScope scope = KeywordScope.Status,
         string? dataKey = null,
-        object? dataValue = null)
+        object? dataValue = null,
+        List<string>? issues = null)
     {
-        var dict = new Dictionary<string, object?>();
+        var dict = new Dictionary<string, object?>(StringComparer.Ordinal);
+        var context = new ResolutionContext
+        {
+            RuntimeValues = runtimeValues ?? ResolutionContext.EmptyRuntime,
+            GlobalValues = globalValues ?? ResolutionContext.EmptyGlobal,
+            Scope = scope
+        };
 
         foreach (var field in fields.Where(x => x.Enabled && !string.IsNullOrWhiteSpace(x.Key)))
         {
-            object? value = field.Source switch
+            var value = ValueResolver.Resolve(field, context, out var error);
+
+            if (error != null)
             {
-                FieldSourceType.Fixed => field.Value,
-                FieldSourceType.Global => globalValues.TryGetValue(field.Value, out var g) ? g : "",
-                FieldSourceType.Runtime => runtimeValues.TryGetValue(field.Value, out var r) ? r : null,
-                _ => null
-            };
-            dict[field.Key] = value ?? "";
+                issues?.Add($"字段「{field.Key}」：{error}");
+            }
+
+            if (!NestedObjectBuilder.Set(dict, field.Key, value, out var pathError)
+                && pathError != null)
+            {
+                issues?.Add(pathError);
+            }
         }
 
-        // 课表字典字段作为整体注入，避免被模板逐字段拆解
+        // 课表字典作为整体注入，避免被模板逐字段拆解。
+        // 放在最后，与改造前的覆盖语义保持一致。
         if (!string.IsNullOrEmpty(dataKey) && dataValue != null)
         {
-            dict[dataKey] = dataValue;
+            if (!NestedObjectBuilder.Set(dict, dataKey, dataValue, out var dataError)
+                && dataError != null)
+            {
+                issues?.Add(dataError);
+            }
         }
 
         return JsonSerializer.Serialize(dict, WriteOptions);
@@ -405,16 +628,77 @@ public static class MessageBuilder
     /// <summary>
     /// 校验模板，返回需要提示给用户的问题列表。
     /// </summary>
-    public static List<string> Validate(MessageTemplate template, bool isStatus)
+    /// <param name="template">待校验的模板。</param>
+    /// <param name="isStatus">true 校验状态字段，false 校验课表字段。</param>
+    /// <param name="scheduleItemFields">课表项字段，只在课表侧一并校验。</param>
+    /// <param name="runtimeKeys">该作用域下运行时实际会提供的键名，可为 null 表示跳过该项检查。</param>
+    public static List<string> Validate(
+        MessageTemplate template,
+        bool isStatus,
+        IReadOnlyList<MessageField>? scheduleItemFields = null,
+        IReadOnlySet<string>? runtimeKeys = null)
     {
         var issues = new List<string>();
         var fields = isStatus ? template.StatusFields : template.ScheduleFields;
+        var scope = isStatus ? KeywordScope.Status : KeywordScope.Schedule;
+
+        ValidateFields(fields, scope, isStatus ? "状态报文" : "课表报文", issues, runtimeKeys);
+
+        // 课表项字段此前完全没有校验，配错了只会在运行时静默取到空串
+        if (!isStatus && scheduleItemFields != null)
+        {
+            ValidateFields(scheduleItemFields, KeywordScope.ScheduleItem, "课表项", issues,
+                KeywordCatalog.ForScope(KeywordScope.ScheduleItem).Select(x => x.Key).ToHashSet(StringComparer.Ordinal));
+        }
+
+        // 键名结构冲突：把启用字段与课表字典键名放一起试写一遍
+        if (!isStatus)
+        {
+            var probe = new Dictionary<string, object?>(StringComparer.Ordinal);
+            foreach (var f in fields.Where(x => x.Enabled && !string.IsNullOrWhiteSpace(x.Key)))
+            {
+                if (!NestedObjectBuilder.Set(probe, f.Key, null, out var conflict) && conflict != null)
+                {
+                    issues.Add(conflict);
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(template.ScheduleDataKey)
+                && !NestedObjectBuilder.Set(probe, template.ScheduleDataKey, null, out var dataConflict)
+                && dataConflict != null)
+            {
+                issues.Add(dataConflict);
+            }
+        }
+
+        return issues;
+    }
+
+    /// <summary>
+    /// 校验一组字段。
+    /// </summary>
+    /// <param name="fields">字段集合。</param>
+    /// <param name="scope">作用域。</param>
+    /// <param name="sceneName">场景名，用于拼提示语。</param>
+    /// <param name="issues">收集问题的列表。</param>
+    /// <param name="runtimeKeys">运行时实际提供的键名；为 null 时用目录兜底。</param>
+    private static void ValidateFields(
+        IReadOnlyList<MessageField>? fields,
+        KeywordScope scope,
+        string sceneName,
+        List<string> issues,
+        IReadOnlySet<string>? runtimeKeys)
+    {
+        if (fields == null)
+        {
+            return;
+        }
 
         var enabled = fields.Where(x => x.Enabled).ToList();
         if (enabled.Count == 0)
         {
-            issues.Add(isStatus ? "状态报文至少需要启用一个字段。" : "课表报文至少需要启用一个字段。");
-            return issues;
+            issues.Add($"{sceneName}至少需要启用一个字段。");
+            return;
         }
 
         var duplicated = enabled
@@ -432,11 +716,167 @@ public static class MessageBuilder
         {
             if (string.IsNullOrWhiteSpace(f.Key))
             {
-                issues.Add("存在未填写字段名的启用项。");
+                issues.Add($"{sceneName}中存在未填写字段名的启用项。");
                 break;
             }
         }
 
-        return issues;
+        var known = runtimeKeys
+            ?? KeywordCatalog.ForScope(scope).Select(x => x.Key).ToHashSet(StringComparer.Ordinal);
+
+        foreach (var f in enabled.Where(x => !string.IsNullOrWhiteSpace(x.Key)))
+        {
+            ValidateFieldValue(f, scope, known, issues);
+        }
+    }
+
+    /// <summary>
+    /// 校验单个字段的取值表达式与值类型是否自洽。
+    /// </summary>
+    private static void ValidateFieldValue(
+        MessageField field,
+        KeywordScope scope,
+        IReadOnlySet<string> knownKeys,
+        List<string> issues)
+    {
+        var expression = (field.Value ?? "").Trim();
+
+        switch (field.Source)
+        {
+            case FieldSourceType.Runtime:
+                if (expression.Length == 0)
+                {
+                    issues.Add($"字段「{field.Key}」的取值为空。");
+                }
+                else if (!knownKeys.Contains(expression))
+                {
+                    var hint = KeywordCatalog.SuggestClosest(expression, scope);
+                    issues.Add(hint == null
+                        ? $"字段「{field.Key}」引用了未知的运行时变量「{expression}」。"
+                        : $"字段「{field.Key}」引用了未知的运行时变量「{expression}」，是否想写「{hint}」？");
+                }
+
+                break;
+
+            case FieldSourceType.Global:
+                if (expression.Length == 0)
+                {
+                    issues.Add($"字段「{field.Key}」的取值为空。");
+                }
+                else if (!KeywordCatalog.IsKnownGlobalKey(expression))
+                {
+                    var hint = KeywordCatalog.SuggestClosest(expression, KeywordScope.Global);
+                    issues.Add(hint == null
+                        ? $"字段「{field.Key}」引用了未知的配置项「{expression}」。"
+                        : $"字段「{field.Key}」引用了未知的配置项「{expression}」，是否想写「{hint}」？");
+                }
+
+                break;
+
+            case FieldSourceType.Template:
+                // 模板里的占位符逐个核对，未命中说明拼错了
+                if (expression.Length == 0)
+                {
+                    issues.Add($"字段「{field.Key}」的模板内容为空。");
+                    break;
+                }
+
+                foreach (var key in FindUnresolvedPlaceholders(field.Value ?? "", scope, knownKeys))
+                {
+                    var hint = KeywordCatalog.SuggestClosest(key, scope)
+                               ?? KeywordCatalog.SuggestClosest(key, KeywordScope.Global);
+                    issues.Add(hint == null
+                        ? $"字段「{field.Key}」的模板里引用了未知的关键字「{key}」。"
+                        : $"字段「{field.Key}」的模板里引用了未知的关键字「{key}」，是否想写「{hint}」？");
+                }
+
+                break;
+        }
+
+        ValidateValueTypeCoherence(field, expression, scope, knownKeys, issues);
+    }
+
+    /// <summary>找出模板里所有无法解析的占位符键名。</summary>
+    private static IReadOnlyList<string> FindUnresolvedPlaceholders(
+        string template, KeywordScope scope, IReadOnlySet<string> knownKeys)
+    {
+        var result = Interpolation.Expand(template, key =>
+        {
+            if (knownKeys.Contains(key)) return "";
+            if (KeywordCatalog.IsKnownGlobalKey(key)) return "";
+            return null;      // 返回 null 即判定为未命中
+        });
+
+        // 全局配置键是跨作用域可用的，前面已放行，这里不再重复报
+        return result.UnresolvedKeys;
+    }
+
+    /// <summary>
+    /// 检查值类型与取值内容是否可能转换成功。
+    /// </summary>
+    /// <remarks>
+    /// 只在「明知不可能成功」时提示，不试图预测运行时的具体内容——
+    /// 例如运行时变量本身是数字，配数字类型当然没问题。
+    /// </remarks>
+    private static void ValidateValueTypeCoherence(
+        MessageField field,
+        string expression,
+        KeywordScope scope,
+        IReadOnlySet<string> knownKeys,
+        List<string> issues)
+    {
+        // 字面量配数字/布尔：内容固定，转不动就是转不动
+        if (field.Source == FieldSourceType.Fixed && expression.Length > 0)
+        {
+            if (field.ValueType == FieldValueType.Number
+                && !long.TryParse(expression, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out _)
+                && !double.TryParse(expression, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out _))
+            {
+                issues.Add($"字段「{field.Key}」的值类型是数字，但固定文本「{expression}」不是数字。");
+            }
+
+            if (field.ValueType == FieldValueType.RawJson)
+            {
+                try
+                {
+                    System.Text.Json.Nodes.JsonNode.Parse(expression);
+                }
+                catch (JsonException)
+                {
+                    issues.Add($"字段「{field.Key}」的值类型是原始JSON，但固定文本不是合法 JSON。");
+                }
+            }
+        }
+
+        // 引用型来源配了明显不兼容的类型：文本类变量转不成数字
+        if (field.Source is FieldSourceType.Runtime)
+        {
+            var descriptor = KeywordCatalog.Find(expression, scope);
+            if (descriptor == null)
+            {
+                return;
+            }
+
+            var suggested = descriptor.SuggestedValueType;
+
+            if (field.ValueType == FieldValueType.Number
+                && suggested != FieldValueType.Number
+                && suggested != FieldValueType.Auto)
+            {
+                issues.Add(
+                    $"字段「{field.Key}」的变量「{expression}」（{descriptor.DisplayName}）不是数字型，"
+                    + $"设为数字类型可能转换失败。");
+            }
+
+            if (field.ValueType == FieldValueType.Boolean
+                && suggested != FieldValueType.Boolean)
+            {
+                issues.Add(
+                    $"字段「{field.Key}」的变量「{expression}」（{descriptor.DisplayName}）不是布尔型，"
+                    + $"设为布尔类型可能转换失败。");
+            }
+        }
     }
 }

@@ -123,19 +123,27 @@ public class ApiClient : IDisposable
         }
 
         var template = _settings.ScheduleTemplate;
+        var globalValues = _settings.GetGlobalValues();
+        var issues = new List<string>();
 
-        // 内部中间表示 → 用户选定的格式预设
-        var format = ScheduleFormatCatalog.Parse(_settings.ScheduleFormat);
+        // 内部中间表示 → 用户选定的格式预设。
+        // 把全局配置一并传进去，课表项字段才能引用设备ID、班级名称等。
+        // 格式以活动模板的指定为准，模板没指定时才用全局设置。
+        var format = _settings.ResolveScheduleFormat();
         var data = ScheduleFormatter.Convert(
-            schedule, format, _settings.ScheduleItemFields, _settings.ScheduleIndexKeyPrefix);
+            schedule, format, _settings.ScheduleItemFields,
+            _settings.ScheduleIndexKeyPrefix, globalValues);
 
         var json = MessageBuilder.Build(
             template.ScheduleFields,
             runtimeValues,
-            _settings.GetGlobalValues(),
+            globalValues,
+            KeywordScope.Schedule,
             template.ScheduleDataKey,
-            data);
+            data,
+            issues);
 
+        LogBuildIssues("课表", issues);
         return await PostRawAsync(template.ScheduleEndpoint, json, cancellationToken).ConfigureAwait(false);
     }
 
@@ -153,12 +161,37 @@ public class ApiClient : IDisposable
         }
 
         var template = _settings.StatusTemplate;
+        var issues = new List<string>();
         var json = MessageBuilder.Build(
             template.StatusFields,
             runtimeValues,
-            _settings.GetGlobalValues());
+            _settings.GetGlobalValues(),
+            KeywordScope.Status,
+            issues: issues);
+
+        LogBuildIssues("状态", issues);
 
         return await PostRawAsync(template.StatusEndpoint, json, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 把构建报文时收集到的问题写进日志。
+    /// </summary>
+    /// <remarks>
+    /// 这些问题不影响报文结构完整性（取值失败会回退为原文本），
+    /// 但通常意味着模板配错了，写进日志便于用户按图索骥地修正。
+    /// 正常情况下列表为空，不产生任何日志噪音。
+    /// </remarks>
+    /// <param name="scene">场景名，如「状态」「课表」。</param>
+    /// <param name="issues">构建期收集的问题。</param>
+    private static void LogBuildIssues(string scene, List<string> issues)
+    {
+        if (issues == null || issues.Count == 0)
+        {
+            return;
+        }
+
+        Logger.Warning($"{scene}报文构建提示：{string.Join("；", issues)}");
     }
 
     private async Task<ApiResponse> PostJsonAsync(string path, object payload, CancellationToken cancellationToken)

@@ -318,7 +318,8 @@ public class Plugin : PluginBase
         IReadOnlyList<MessageField>? itemFields,
         string? indexKeyPrefix)
         => ScheduleFormatter.Preview(
-            ScheduleFormatter.CreateSampleSchedule(), format, itemFields, indexKeyPrefix);
+            ScheduleFormatter.CreateSampleSchedule(), format, itemFields, indexKeyPrefix,
+            _instance?._settings.GetGlobalValues());
 
     // ── 课表变更监听 ──
 
@@ -658,7 +659,9 @@ public class Plugin : PluginBase
     {
         var values = BuildStatusRuntimeValues();
         var template = _settings.StatusTemplate;
-        return MessageBuilder.Build(template.StatusFields, values, _settings.GetGlobalValues());
+        return MessageBuilder.Build(
+            template.StatusFields, values, _settings.GetGlobalValues(),
+            KeywordScope.Status);
     }
 
     /// <summary>
@@ -929,7 +932,7 @@ public class Plugin : PluginBase
     /// 取得课表格式的解析结果（预设 + 字段级自定义 + 键前缀）。
     /// </summary>
     private (ScheduleFormat Format, List<MessageField> Fields, string Prefix) GetScheduleFormatOptions()
-        => (ScheduleFormatCatalog.Parse(_settings.ScheduleFormat),
+        => (_settings.ResolveScheduleFormat(),
             _settings.ScheduleItemFields,
             _settings.ScheduleIndexKeyPrefix ?? "");
 
@@ -950,11 +953,12 @@ public class Plugin : PluginBase
         };
 
         var template = _settings.ScheduleTemplate;
+        var globalValues = _settings.GetGlobalValues();
         var (format, itemFields, prefix) = GetScheduleFormatOptions();
-        var data = ScheduleFormatter.Convert(schedule, format, itemFields, prefix);
+        var data = ScheduleFormatter.Convert(schedule, format, itemFields, prefix, globalValues);
 
         return MessageBuilder.Build(template.ScheduleFields, runtimeValues,
-            _settings.GetGlobalValues(), template.ScheduleDataKey, data);
+            globalValues, KeywordScope.Schedule, template.ScheduleDataKey, data);
     }
 
     /// <summary>

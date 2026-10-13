@@ -284,6 +284,121 @@ public class PluginSettings
         return result.Length == 0 || result.All(c => c == '_') ? fallback : result;
     }
 
+    /// <summary>
+    /// 规范化键路径：去空白与不可见字符，去掉空段，逐段截断。
+    /// </summary>
+    /// <remarks>
+    /// 与 <see cref="NormalizeFieldName"/> 的区别在于<b>保留点号</b>——
+    /// 点号在这里是嵌套层级的分隔符，而前者会把点号替换成下划线，
+    /// 用错就把用户的嵌套结构压平了。
+    /// </remarks>
+    /// <param name="value">原始键名，可含点号路径。</param>
+    /// <param name="fallback">清洗后为空时的回落值。</param>
+    internal static string NormalizeKeyPath(string? value, string fallback)
+    {
+        var cleaned = TextSanitizer.Clean(value);
+        if (cleaned.Length == 0)
+        {
+            return fallback;
+        }
+
+        var segments = NestedObjectBuilder.SplitPath(cleaned, out _);
+
+        // 全部是空段（如 ".."）时回落，避免生成空键
+        return segments.Count == 0 ? fallback : NestedObjectBuilder.JoinPath(segments);
+    }
+
+    /// <summary>
+    /// 归一化单个报文字段：键名、取值表达式、来源与值类型。
+    /// </summary>
+    /// <remarks>
+    /// 改造前只处理了键名，取值表达式完全不清洗、来源也没有越界回落，
+    /// 于是旧配置里一个越界枚举值会让界面下拉显示空白、取值恒为空串。
+    /// </remarks>
+    private static void NormalizeMessageField(MessageField? field)
+    {
+        if (field == null)
+        {
+            return;
+        }
+
+        // 枚举越界回落。反序列化不会校验枚举取值，
+        // JSON 里写个 99 就会得到一个未定义的枚举值。
+        if (!Enum.IsDefined(field.Source))
+        {
+            field.Source = FieldSourceType.Runtime;
+        }
+
+        if (!Enum.IsDefined(field.ValueType))
+        {
+            field.ValueType = FieldValueType.Auto;
+        }
+
+        field.Value = TextSanitizer.Clean(field.Value ?? "");
+        if (field.Value.Length > KeywordCatalog.MaxExpressionLength)
+        {
+            field.Value = field.Value[..KeywordCatalog.MaxExpressionLength];
+        }
+
+        // 空白键名保持原样：用户可能正在编辑中途保存，
+        // 模板校验会提示补全，这里不该擅自改名。只有原本有内容、
+        // 清洗后却什么都不剩（例如整串零宽字符）才给占位名。
+        if (!string.IsNullOrWhiteSpace(field.Key))
+        {
+            field.Key = NormalizeKeyPath(field.Key, "_unknown");
+        }
+    }
+
+    /// <summary>
+    /// 保证一套模板的两份字段集都可用（非 null 且非空）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 空列表比 null 更难排查：界面只在 null 时会异常，
+    /// 而空列表会安静地让报文变成 <c>{}</c>，或者让表格看起来「什么都没了」。
+    /// 这里统一补成内置默认字段，与顶层活动模板的既有恢复策略一致。
+    /// </para>
+    /// <para>
+    /// 模板本身为 null 时保持原样——是否要凭空造一份模板属于调用方的决定，
+    /// 例如 <c>ApplyProfile</c> 对 null 模板已有自己的空值判断。
+    /// </para>
+    /// </remarks>
+    private static void EnsureUsableFields(MessageTemplate? template)
+    {
+        if (template == null)
+        {
+            return;
+        }
+
+        if (template.StatusFields == null || template.StatusFields.Count == 0)
+        {
+            template.StatusFields = MessageTemplate.CreateDefaultStatusFields();
+        }
+
+        if (template.ScheduleFields == null || template.ScheduleFields.Count == 0)
+        {
+            template.ScheduleFields = MessageTemplate.CreateDefaultScheduleFields();
+        }
+    }
+
+    /// <summary>
+    /// 归一化课表项字段集，并剔除键名为空的项。
+    /// </summary>
+    private static void NormalizeItemFields(List<MessageField>? fields)
+    {
+        if (fields == null)
+        {
+            return;
+        }
+
+        foreach (var field in fields)
+        {
+            NormalizeMessageField(field);
+        }
+
+        fields.RemoveAll(x => x == null || string.IsNullOrWhiteSpace(x.Key));
+    }
+
     private static readonly JsonSerializerOptions ReadOptions = new()
     {
         PropertyNameCaseInsensitive = true
@@ -345,6 +460,11 @@ public class PluginSettings
             ScheduleTemplate.ScheduleFields = MessageTemplate.CreateDefaultScheduleFields();
         }
 
+        // 另一半也保证非空：模板对象同时承载两份字段集，
+        // 任一半为空都会让界面上的对应表格变成一片空白
+        EnsureUsableFields(StatusTemplate);
+        EnsureUsableFields(ScheduleTemplate);
+
         // 清理列表中的空项与无名项，避免界面上出现空白模板
         StatusTemplates.RemoveAll(x => x == null || string.IsNullOrWhiteSpace(x.Name));
         ScheduleTemplates.RemoveAll(x => x == null || string.IsNullOrWhiteSpace(x.Name));
@@ -353,11 +473,29 @@ public class PluginSettings
         // 列表中的每套模板都要有可用字段，否则界面编辑时会显示为空
         foreach (var t in StatusTemplates.Concat(ScheduleTemplates))
         {
-            t.StatusFields ??= new List<MessageField>();
-            t.ScheduleFields ??= new List<MessageField>();
+            EnsureUsableFields(t);
+        }
+
+        // 命名配置里内嵌的模板此前完全没被归一化，切配置或导入后是裸值
+        foreach (var profile in SavedProfiles)
+        {
+            EnsureUsableFields(profile.StatusTemplate);
+            EnsureUsableFields(profile.ScheduleTemplate);
+            NormalizeItemFields(profile.ScheduleItemFields);
         }
 
         NormalizeActiveTemplateName();
+
+        // 播种内置的旧版协议模板。
+        // <b>必须放在 NormalizeActiveTemplateName 之后</b>：那个方法在活动模板名
+        // 不在列表里时会回落到「列表首项」，若提前播种，列表就不再为空，
+        // 一份活动模板名对不上的旧配置会被静默切换到旧版协议（数组课表）——
+        // 报文形态整个变掉，用户却毫不知情。
+        // 放在之后，回落仍然取内置默认模板，而预设本身照样出现在下拉里。
+        if (!StatusTemplates.Any(x => x.Name == MessageTemplate.LegacyTemplateName))
+        {
+            StatusTemplates.Add(MessageTemplate.CreateLegacy());
+        }
 
         // ── 频率范围钳制（下限保护，避免误设导致请求风暴）──
         if (StatusSendIntervalSeconds < MinStatusIntervalSeconds)
@@ -391,7 +529,9 @@ public class PluginSettings
         // 模板内的路径与字段名同样需要规范化，否则用户改坏一处就能让整条通道失效
         foreach (var t in new[] { StatusTemplate, ScheduleTemplate }
                      .Concat(StatusTemplates)
-                     .Concat(ScheduleTemplates))
+                     .Concat(ScheduleTemplates)
+                     .Concat(SavedProfiles.Select(x => x.StatusTemplate))
+                     .Concat(SavedProfiles.Select(x => x.ScheduleTemplate)))
         {
             if (t == null)
             {
@@ -400,29 +540,25 @@ public class PluginSettings
 
             t.StatusEndpoint = NormalizeEndpoint(t.StatusEndpoint, "/class/api/submit");
             t.ScheduleEndpoint = NormalizeEndpoint(t.ScheduleEndpoint, "/class/api/schedule/update");
-            t.ScheduleDataKey = NormalizeFieldName(t.ScheduleDataKey, "Schedule");
 
-            // 字段名是 JSON 的键，必须与值区分对待：键不许含空白与不可见字符
+            // 课表字典的键名同样允许点号路径，因此用键路径规则而不是
+            // NormalizeFieldName —— 后者会把点号换成下划线，把嵌套结构吃掉。
+            t.ScheduleDataKey = NormalizeKeyPath(t.ScheduleDataKey, "Schedule");
+
+            // 模板指定的课表格式：留空表示跟随全局设置；
+            // 填了就必须是合法预设，否则回落为空（= 跟随全局），
+            // 避免一个拼错的格式名让整块课表内容变成空对象。
+            if (!string.IsNullOrWhiteSpace(t.ScheduleFormat)
+                && !Enum.TryParse<ScheduleFormat>(t.ScheduleFormat, out _))
+            {
+                t.ScheduleFormat = "";
+            }
+
+            // 字段名是 JSON 的键，必须与值区分对待：键不许含空白与不可见字符。
+            // 取值表达式与值类型也在这里一并归一化。
             foreach (var f in t.StatusFields.Concat(t.ScheduleFields))
             {
-                if (f == null || string.IsNullOrWhiteSpace(f.Key))
-                {
-                    continue;
-                }
-
-                var key = TextSanitizer.Clean(f.Key);
-                if (key.Length == 0)
-                {
-                    f.Key = "_unknown";
-                    continue;
-                }
-
-                if (key.Length > 64)
-                {
-                    key = key[..64];
-                }
-
-                f.Key = key;
+                NormalizeMessageField(f);
             }
         }
 
@@ -433,7 +569,7 @@ public class PluginSettings
         }
 
         ScheduleItemFields ??= MessageField.CreateScheduleItemDefaults();
-        ScheduleItemFields.RemoveAll(x => x == null || string.IsNullOrWhiteSpace(x.Key));
+        NormalizeItemFields(ScheduleItemFields);
         if (ScheduleItemFields.Count == 0)
         {
             ScheduleItemFields = MessageField.CreateScheduleItemDefaults();
@@ -740,4 +876,17 @@ public class PluginSettings
         ["ClassName"] = ClassName,
         ["ServerUrl"] = ServerUrl
     };
+
+    /// <summary>
+    /// 当前生效的课表格式。
+    /// </summary>
+    /// <remarks>
+    /// 活动课表模板若自己指定了格式，以它为准；留空则用主设置里的全局值。
+    /// 这样「旧版协议模板」可以直接把格式钉成数组形态，
+    /// 用户切换模板即切换整套协议，不必再去改格式下拉。
+    /// </remarks>
+    public ScheduleFormat ResolveScheduleFormat()
+        => string.IsNullOrWhiteSpace(ScheduleTemplate?.ScheduleFormat)
+            ? ScheduleFormatCatalog.Parse(ScheduleFormat)
+            : ScheduleFormatCatalog.Parse(ScheduleTemplate!.ScheduleFormat);
 }
