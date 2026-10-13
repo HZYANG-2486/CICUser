@@ -131,6 +131,24 @@ public class PluginSettings
     /// <summary>允许使用明文 HTTP（未加密）服务器地址。</summary>
     public bool AllowInsecureHttp { get; set; } = true;
 
+    // ── 请求签名（方案 A：共享密钥 + 时间戳 + 随机数）──
+    /// <summary>
+    /// 是否启用请求签名。默认关闭，避免影响尚未实现校验的服务端。
+    /// 开启后每次上报都会附带签名头，服务端校验不通过即拒绝，
+    /// 使截获到的设备ID 无法被长期冒用。
+    /// </summary>
+    public bool SignatureEnabled { get; set; } = false;
+
+    /// <summary>
+    /// 与设备ID 配对的共享密钥。
+    /// </summary>
+    /// <remarks>
+    /// <b>该值不会随任何报文发送</b>，只与本机配置和服务端各存一份，
+    /// 因此即便有人抓到全部上报内容，也拿不到它、无法伪造新请求。
+    /// 导出配置时会主动清空该字段，防止凭据随分发的配置文件外流。
+    /// </remarks>
+    public string DeviceSecret { get; set; } = "";
+
     // ── 报文模板 ──
     /// <summary>状态报文模板。</summary>
     public MessageTemplate StatusTemplate { get; set; } = MessageTemplate.CreateDefault();
@@ -526,6 +544,9 @@ public class PluginSettings
         // 地址自带路径（如 http://host:8080/base）是允许的，拼接时只保留其前缀。
         ServerUrl = NormalizeServerUrl(ServerUrl);
 
+        // 共享密钥是十六进制串，去掉粘贴时可能夹带的空白与不可见字符
+        DeviceSecret = TextSanitizer.CleanStrict(DeviceSecret, alsoRemoveWhitespace: true);
+
         // 模板内的路径与字段名同样需要规范化，否则用户改坏一处就能让整条通道失效
         foreach (var t in new[] { StatusTemplate, ScheduleTemplate }
                      .Concat(StatusTemplates)
@@ -697,11 +718,22 @@ public class PluginSettings
     /// <summary>
     /// 导出当前配置到指定文件，供批量部署时复制到其它教室设备。
     /// </summary>
+    /// <remarks>
+    /// 导出件常被当作「教学资料」在群里分发，因此这里主动清空共享密钥：
+    /// 凭据一旦跟着配置文件外流，签名机制也就形同虚设。
+    /// 导入方需要在服务端单独登记自己的密钥。
+    /// </remarks>
     public static bool ExportTo(string filePath, PluginSettings settings)
     {
         try
         {
-            var json = JsonSerializer.Serialize(settings, WriteOptions);
+            // 先序列化再反序列化，得到一份深拷贝，避免改动到正在使用的配置对象
+            var snapshot = JsonSerializer.Serialize(settings, WriteOptions);
+            var safe = JsonSerializer.Deserialize<PluginSettings>(snapshot, ReadOptions)
+                       ?? new PluginSettings();
+            safe.DeviceSecret = "";
+
+            var json = JsonSerializer.Serialize(safe, WriteOptions);
             File.WriteAllText(filePath, json);
             return true;
         }

@@ -62,6 +62,13 @@ public class ApiClient : IDisposable
             return "设备ID为空";
         }
 
+        // 开了签名却没有密钥属于配置错误：继续发出去也只会被服务端拒绝，
+        // 不如在本地就报清楚，省去一轮无谓的网络往返。
+        if (_settings.SignatureEnabled && string.IsNullOrWhiteSpace(_settings.DeviceSecret))
+        {
+            return "已启用请求签名，但共享密钥为空";
+        }
+
         return null;
     }
 
@@ -324,7 +331,13 @@ public class ApiClient : IDisposable
             using var content = new StringContent(json, Encoding.UTF8, "application/json");
             var url = $"{GetBaseUrl()}{path}";
 
-            using var response = await _httpClient.PostAsync(url, content, cancellationToken)
+            using var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = content
+            };
+            ApplySignature(request, json);
+
+            using var response = await _httpClient.SendAsync(request, cancellationToken)
                 .ConfigureAwait(false);
             var responseJson = await response.Content.ReadAsStringAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -356,13 +369,51 @@ public class ApiClient : IDisposable
         }
         catch (HttpRequestException ex)
         {
-            // 连接失败 / DNS 失败属于临时问题，值得重试
+            // 连接失败 / DNS 失败属于临时问题，值得重试。
+            // 注意 ex.Message 里通常裸着 host:port，落日志前由 Logger.Mask 负责抹除。
             return (ApiResponse.Fail($"网络请求失败：{ex.Message}"), true);
         }
         catch (Exception ex)
         {
             return (ApiResponse.Fail($"请求失败：{ex.Message}"), false);
         }
+    }
+
+    /// <summary>
+    /// 按配置给请求加上签名头（方案 A）。
+    /// </summary>
+    /// <remarks>
+    /// 未启用签名时不做任何事，报文与旧版完全一致，
+    /// 以便插件先行升级、服务端随后再补校验。
+    /// 签名覆盖请求体原文，因此必须在 <paramref name="json"/> 定稿之后调用。
+    /// </remarks>
+    /// <param name="request">将要发送的请求。</param>
+    /// <param name="json">请求体原文，与正文内容必须逐字节一致。</param>
+    private void ApplySignature(HttpRequestMessage request, string json)
+    {
+        if (!_settings.SignatureEnabled)
+        {
+            return;
+        }
+
+        var secret = (_settings.DeviceSecret ?? "").Trim();
+        if (secret.Length == 0)
+        {
+            return;
+        }
+
+        var signed = RequestSigner.Sign(secret, _settings.DeviceId, json);
+
+        request.Headers.TryAddWithoutValidation(
+            RequestSigner.HeaderVersion, RequestSigner.SchemeVersion);
+        request.Headers.TryAddWithoutValidation(
+            RequestSigner.HeaderDevice, _settings.DeviceId);
+        request.Headers.TryAddWithoutValidation(
+            RequestSigner.HeaderTimestamp, signed.Timestamp);
+        request.Headers.TryAddWithoutValidation(
+            RequestSigner.HeaderNonce, signed.Nonce);
+        request.Headers.TryAddWithoutValidation(
+            RequestSigner.HeaderSignature, signed.Signature);
     }
 
     private static ApiResponse ParseResponse(string json)

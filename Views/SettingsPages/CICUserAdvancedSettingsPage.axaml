@@ -521,6 +521,33 @@
                             </StackPanel>
                         </Border>
 
+                        <TextBlock Classes="fieldLabel" Text="请求签名" FontWeight="SemiBold"
+                                   Margin="0,6,0,0"/>
+                        <Border Classes="readout">
+                            <StackPanel Spacing="8">
+                                <CheckBox x:Name="SignatureEnabledCheckBox"
+                                          Content="启用请求签名（防止设备ID 被他人冒用）"
+                                          Click="SignatureEnabledCheckBox_Click"/>
+                                <TextBlock Classes="hint" TextWrapping="Wrap"
+                                           Text="开启后每次上报都会附带由共享密钥算出的一次性签名，服务端校验通过才接受。密钥只存在本机与服务端，从不随报文发送，因此即便上报内容被截获也无法伪造请求。"/>
+
+                                <Grid ColumnDefinitions="*,10,Auto,Auto">
+                                    <TextBox Grid.Column="0" x:Name="DeviceSecretTextBox"
+                                             Watermark="填与服务端登记一致的共享密钥"
+                                             FontFamily="Cascadia Mono,Consolas,monospace"/>
+                                    <Button Grid.Column="2" x:Name="GenerateSecretButton"
+                                            Content="生成新密钥" Height="34" Padding="14,0"
+                                            Click="GenerateSecretButton_Click"/>
+                                    <Button Grid.Column="3" x:Name="CopySecretButton"
+                                            Content="复制" Height="34" Padding="14,0"
+                                            Margin="8,0,0,0" Click="CopySecretButton_Click"/>
+                                </Grid>
+                                <TextBlock x:Name="SignatureHintText" Classes="hint"
+                                           TextWrapping="Wrap"
+                                           Text="更换密钥后需在服务端同步更新，否则上报会被拒绝。若怀疑整份配置（含密钥）已经外泄，请同时重置设备ID 并在服务端删除旧设备记录。"/>
+                            </StackPanel>
+                        </Border>
+
                         <TextBlock Classes="fieldLabel" Text="当前日志文件" FontWeight="SemiBold"
                                    Margin="0,6,0,0"/>
                         <Border Classes="readout">

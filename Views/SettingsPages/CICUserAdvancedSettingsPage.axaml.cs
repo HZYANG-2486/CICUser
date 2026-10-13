@@ -146,8 +146,49 @@ public partial class CICUserAdvancedSettingsPage : SettingsPageBase
         MaskSensitiveCheckBox.IsChecked = _settings.MaskSensitiveInLog;
         AllowInsecureHttpCheckBox.IsChecked = _settings.AllowInsecureHttp;
 
+        SignatureEnabledCheckBox.IsChecked = _settings.SignatureEnabled;
+        DeviceSecretTextBox.Text = _settings.DeviceSecret;
+        UpdateSignatureHint();
+
         LogPathText.Text = Logger.CurrentLogPath;
         UpdateInsecureHttpHint();
+    }
+
+    /// <summary>
+    /// 刷新请求签名下方的状态提示。
+    /// </summary>
+    /// <remarks>
+    /// 「开了开关却没填密钥」是配置上最容易漏的一步：此时客户端会在本地
+    /// 直接拒绝发送（见 ApiClient.ValidateConnection），提示必须说清原因，
+    /// 否则用户只会看到上报一直失败而不知为何。
+    /// </remarks>
+    private void UpdateSignatureHint()
+    {
+        var enabled = SignatureEnabledCheckBox.IsChecked == true;
+        var hasSecret = !string.IsNullOrWhiteSpace(DeviceSecretTextBox.Text);
+
+        if (enabled && !hasSecret)
+        {
+            SignatureHintText.Text = "已启用签名但共享密钥为空，上报会在本地被拒绝。请点「生成新密钥」" +
+                                     "并在服务端登记同一份密钥。";
+            SignatureHintText.Foreground = new Avalonia.Media.SolidColorBrush(
+                Avalonia.Media.Color.Parse("#C62828"));
+            return;
+        }
+
+        if (enabled)
+        {
+            SignatureHintText.Text = "签名已启用。请确认服务端已为该设备ID 登记同一份密钥，" +
+                                     "否则上报会被服务端拒绝。";
+            SignatureHintText.Foreground = new Avalonia.Media.SolidColorBrush(
+                Avalonia.Media.Color.Parse("#2E7D32"));
+            return;
+        }
+
+        SignatureHintText.Text = "更换密钥后需在服务端同步更新，否则上报会被拒绝。" +
+                                 "若怀疑整份配置（含密钥）已经外泄，请同时重置设备ID 并在服务端删除旧设备记录。";
+        SignatureHintText.Foreground = new Avalonia.Media.SolidColorBrush(
+            Avalonia.Media.Color.Parse("#6B6B6B"));
     }
 
     /// <summary>回显报文模板相关控件。</summary>
@@ -983,6 +1024,49 @@ public partial class CICUserAdvancedSettingsPage : SettingsPageBase
 
         _settings.MaskSensitiveInLog = MaskSensitiveCheckBox.IsChecked == true;
         _settings.AllowInsecureHttp = AllowInsecureHttpCheckBox.IsChecked == true;
+
+        _settings.SignatureEnabled = SignatureEnabledCheckBox.IsChecked == true;
+        _settings.DeviceSecret = (DeviceSecretTextBox.Text ?? "").Trim();
+    }
+
+    /// <summary>
+    /// 切换签名开关时即时刷新提示，避免用户在「开了却没填密钥」的状态下反复试错。
+    /// </summary>
+    private void SignatureEnabledCheckBox_Click(object? sender, RoutedEventArgs e)
+        => UpdateSignatureHint();
+
+    /// <summary>
+    /// 生成一份新的共享密钥并回填到输入框。
+    /// </summary>
+    /// <remarks>
+    /// 只换密钥、不动设备ID：签名机制下密钥才是凭据，
+    /// 仅轮换密钥就足以让此前泄漏的报文彻底作废，
+    /// 而设备ID 保持不变可以让服务端少改一处记录。
+    /// </remarks>
+    private void GenerateSecretButton_Click(object? sender, RoutedEventArgs e)
+    {
+        DeviceSecretTextBox.Text = RequestSigner.GenerateSecret();
+        UpdateSignatureHint();
+        ShowMessage("已生成新密钥，请复制后在服务端登记（保存后生效）。", isError: false);
+    }
+
+    private void CopySecretButton_Click(object? sender, RoutedEventArgs e)
+    {
+        var secret = (DeviceSecretTextBox.Text ?? "").Trim();
+        if (secret.Length == 0)
+        {
+            ShowMessage("密钥为空，请先点「生成新密钥」。", isError: true);
+            return;
+        }
+
+        if (SettingsDisplayHelper.TrySetClipboardText(this, secret))
+        {
+            ShowMessage("密钥已复制到剪贴板。", isError: false);
+        }
+        else
+        {
+            ShowMessage("无法访问剪贴板，请手动选中密钥文本复制。", isError: true);
+        }
     }
 
     // ── 报文模板编辑 ──

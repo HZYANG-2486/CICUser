@@ -1,0 +1,610 @@
+diff --color -ruN a/ApiClient.cs b/ApiClient.cs
+--- a/ApiClient.cs	2026-10-13 22:17:51.372498196 +0800
++++ b/ApiClient.cs	2026-10-13 22:17:51.370498234 +0800
+@@ -62,6 +62,13 @@
+             return "设备ID为空";
+         }
+ 
++        // 开了签名却没有密钥属于配置错误：继续发出去也只会被服务端拒绝，
++        // 不如在本地就报清楚，省去一轮无谓的网络往返。
++        if (_settings.SignatureEnabled && string.IsNullOrWhiteSpace(_settings.DeviceSecret))
++        {
++            return "已启用请求签名，但共享密钥为空";
++        }
++
+         return null;
+     }
+ 
+@@ -324,7 +331,13 @@
+             using var content = new StringContent(json, Encoding.UTF8, "application/json");
+             var url = $"{GetBaseUrl()}{path}";
+ 
+-            using var response = await _httpClient.PostAsync(url, content, cancellationToken)
++            using var request = new HttpRequestMessage(HttpMethod.Post, url)
++            {
++                Content = content
++            };
++            ApplySignature(request, json);
++
++            using var response = await _httpClient.SendAsync(request, cancellationToken)
+                 .ConfigureAwait(false);
+             var responseJson = await response.Content.ReadAsStringAsync(cancellationToken)
+                 .ConfigureAwait(false);
+@@ -356,7 +369,8 @@
+         }
+         catch (HttpRequestException ex)
+         {
+-            // 连接失败 / DNS 失败属于临时问题，值得重试
++            // 连接失败 / DNS 失败属于临时问题，值得重试。
++            // 注意 ex.Message 里通常裸着 host:port，落日志前由 Logger.Mask 负责抹除。
+             return (ApiResponse.Fail($"网络请求失败：{ex.Message}"), true);
+         }
+         catch (Exception ex)
+@@ -365,6 +379,43 @@
+         }
+     }
+ 
++    /// <summary>
++    /// 按配置给请求加上签名头（方案 A）。
++    /// </summary>
++    /// <remarks>
++    /// 未启用签名时不做任何事，报文与旧版完全一致，
++    /// 以便插件先行升级、服务端随后再补校验。
++    /// 签名覆盖请求体原文，因此必须在 <paramref name="json"/> 定稿之后调用。
++    /// </remarks>
++    /// <param name="request">将要发送的请求。</param>
++    /// <param name="json">请求体原文，与正文内容必须逐字节一致。</param>
++    private void ApplySignature(HttpRequestMessage request, string json)
++    {
++        if (!_settings.SignatureEnabled)
++        {
++            return;
++        }
++
++        var secret = (_settings.DeviceSecret ?? "").Trim();
++        if (secret.Length == 0)
++        {
++            return;
++        }
++
++        var signed = RequestSigner.Sign(secret, _settings.DeviceId, json);
++
++        request.Headers.TryAddWithoutValidation(
++            RequestSigner.HeaderVersion, RequestSigner.SchemeVersion);
++        request.Headers.TryAddWithoutValidation(
++            RequestSigner.HeaderDevice, _settings.DeviceId);
++        request.Headers.TryAddWithoutValidation(
++            RequestSigner.HeaderTimestamp, signed.Timestamp);
++        request.Headers.TryAddWithoutValidation(
++            RequestSigner.HeaderNonce, signed.Nonce);
++        request.Headers.TryAddWithoutValidation(
++            RequestSigner.HeaderSignature, signed.Signature);
++    }
++
+     private static ApiResponse ParseResponse(string json)
+     {
+         if (string.IsNullOrWhiteSpace(json))
+diff --color -ruN a/Logger.cs b/Logger.cs
+--- a/Logger.cs	2026-10-13 22:17:51.378498080 +0800
++++ b/Logger.cs	2026-10-13 22:17:51.377498100 +0800
+@@ -43,6 +43,20 @@
+     /// </summary>
+     public static bool MaskSensitive { get; set; } = true;
+ 
++    /// <summary>
++    /// 需要从日志中抹除的字面量，通常取自当前配置的服务器主机名。
++    /// 由插件在加载配置后设置。
++    /// </summary>
++    /// <remarks>
++    /// 正则只能「猜」地址的形态，而 .NET 网络异常的原文形如
++    /// <c>No such host is known. (my-server.local:443)</c> 或
++    /// <c>actively refused it. (192.168.1.10:8080)</c>——主机名裸在括号里，
++    /// 不带 scheme，任何基于形态的规则都可能漏。
++    /// 这里改用「已知答案反查」：从配置里取出主机名，直接做字面量替换，
++    /// 确定性覆盖，且不会误伤版本号之类的数字串。
++    /// </remarks>
++    public static string[] SensitiveLiterals { get; set; } = Array.Empty<string>();
++
+     public static void Info(string message) => WriteLog("INFO", Mask(message));
+ 
+     public static void Warning(string message) => WriteLog("WARN", Mask(message));
+@@ -77,10 +91,11 @@
+     /// 对日志文本做敏感信息脱敏。
+     /// </summary>
+     /// <remarks>
+-    /// 处理两类内容：
++    /// 处理三类内容：
+     /// <list type="bullet">
+     /// <item>设备ID：保留首尾各若干字符，中间以 * 代替，既便于比对又不可还原</item>
+     /// <item>服务器地址：保留 scheme 与端口，隐藏主机名与路径细节</item>
++    /// <item>裸地址：不带 scheme 的内网 IP / 内网域名，常见于网络异常原文</item>
+     /// </list>
+     /// 关闭脱敏时原样返回，便于本机深度排查。
+     /// </remarks>
+@@ -91,11 +106,48 @@
+             return message;
+         }
+ 
++        // 顺序有讲究：
++        // ① 先处理带 scheme 的 URL，它信息最完整、脱敏效果最好；
++        // ② 再处理裸内网地址，覆盖异常原文里的 host:port；
++        // ③ 最后用配置字面量兜底，处理前两步都没认出来的形态；
++        // ④ 设备ID 放最后，避免被前面的替换打乱边界。
+         var result = MaskServerUrls(message);
++        result = MaskBareEndpoints(result);
++        result = MaskLiterals(result);
+         result = MaskDeviceIds(result);
+         return result;
+     }
+ 
++    /// <summary>
++    /// 从服务器地址解析出需要在日志中抹除的字面量。
++    /// </summary>
++    /// <remarks>
++    /// 同时登记 <c>host</c> 与 <c>host:port</c> 两种形态：网络异常原文里
++    /// 两者都可能出现，先替换长串可避免短串把长串切碎后留下端口残片。
++    /// </remarks>
++    /// <param name="serverUrl">当前配置的服务器地址，可为空。</param>
++    /// <returns>按长度降序排列的字面量数组。</returns>
++    public static string[] BuildSensitiveLiterals(string? serverUrl)
++    {
++        if (string.IsNullOrWhiteSpace(serverUrl)
++            || !Uri.TryCreate(serverUrl, UriKind.Absolute, out var uri)
++            || string.IsNullOrWhiteSpace(uri.Host))
++        {
++            return Array.Empty<string>();
++        }
++
++        var host = uri.Host;
++        var literals = new System.Collections.Generic.List<string> { host };
++
++        if (uri.Port > 0)
++        {
++            literals.Add($"{host}:{uri.Port}");
++        }
++
++        literals.Sort((a, b) => b.Length.CompareTo(a.Length));
++        return literals.ToArray();
++    }
++
+     /// <summary>隐藏 URL 中的主机名与凭据部分。</summary>
+     private static string MaskServerUrls(string text)
+         => UrlRegex.Replace(text, match =>
+@@ -106,6 +158,45 @@
+         });
+ 
+     /// <summary>
++    /// 隐藏不带 scheme 的内网地址（含端口）。
++    /// </summary>
++    /// <remarks>
++    /// <see cref="UrlRegex"/> 要求 <c>https?://</c> 开头，而 .NET 的网络异常
++    /// 往往只把 <c>host:port</c> 放进括号里，于是整段原样落进日志。
++    /// 这里只圈定<b>内网段</b>与<b>内网域名后缀</b>：
++    /// 版本号（1.0.0.1）之类的数字串永远不会落在 10./172.16-31./192.168. 段，
++    /// 因此可以放心匹配而不产生误报。
++    /// </remarks>
++    private static string MaskBareEndpoints(string text)
++        => BareEndpointRegex.Replace(text, "***");
++
++    /// <summary>
++    /// 用配置中的已知字面量做精准替换，作为形态匹配的兜底。
++    /// </summary>
++    private static string MaskLiterals(string text)
++    {
++        var literals = SensitiveLiterals;
++        if (literals == null || literals.Length == 0)
++        {
++            return text;
++        }
++
++        var result = text;
++        foreach (var literal in literals)
++        {
++            // 过短的串（如单字符主机名）替换起来只会破坏日志可读性
++            if (string.IsNullOrWhiteSpace(literal) || literal.Length < 4)
++            {
++                continue;
++            }
++
++            result = result.Replace(literal, "***", StringComparison.OrdinalIgnoreCase);
++        }
++
++        return result;
++    }
++
++    /// <summary>
+     /// 隐藏设备ID。
+     /// 设备ID 可能是纯十六进制哈希，也可能是「班级-设备名-哈希」组合形式。
+     /// 这里对形如 <c>ABC-123-DEADBEEF</c> 或 16 位十六进制串做处理。
+@@ -154,6 +245,27 @@
+         @"\b[0-9A-Fa-f]{16}\b",
+         System.Text.RegularExpressions.RegexOptions.Compiled);
+ 
++    /// <summary>
++    /// 匹配不带 scheme 的内网 IPv4（含端口）与内网域名（含端口）。
++    /// </summary>
++    /// <remarks>
++    /// <para>覆盖的私网段：10/8、172.16/12、192.168/16、127/8、169.254/16。</para>
++    /// <para>覆盖的域名后缀：.local / .lan / .internal / .corp / .home，
++    /// 这些是校园与企业内网最常用的私有后缀，公网 DNS 不解析。</para>
++    /// <para>前后用断言排除相邻的字母数字与点号，避免把 <c>v1.0.0.1</c> 或
++    /// 更长串里的片段截出来。</para>
++    /// </remarks>
++    private static readonly System.Text.RegularExpressions.Regex BareEndpointRegex = new(
++        @"(?<![0-9A-Za-z.])(?:" +
++        @"(?:10|127)\.\d{1,3}\.\d{1,3}\.\d{1,3}" +
++        @"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}" +
++        @"|192\.168\.\d{1,3}\.\d{1,3}" +
++        @"|169\.254\.\d{1,3}\.\d{1,3}" +
++        @"|[0-9A-Za-z](?:[0-9A-Za-z-]*[0-9A-Za-z])?\.(?:local|lan|internal|corp|home)" +
++        @")(?::\d{2,5})?(?![0-9A-Za-z])",
++        System.Text.RegularExpressions.RegexOptions.Compiled
++        | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
++
+     private static void WriteLog(string level, string message)
+     {
+         try
+diff --color -ruN a/Plugin.cs b/Plugin.cs
+--- a/Plugin.cs	2026-10-13 22:17:51.384497965 +0800
++++ b/Plugin.cs	2026-10-13 22:17:51.382498004 +0800
+@@ -128,6 +128,7 @@
+ 
+         _settings = PluginSettings.Load();
+         Logger.MaskSensitive = _settings.MaskSensitiveInLog;
++        Logger.SensitiveLiterals = Logger.BuildSensitiveLiterals(_settings.ServerUrl);
+ 
+         // 首次运行或配置缺失时自动生成设备ID 并落盘。
+         // 已有值一律保留，避免覆盖老用户的手填标识。
+@@ -286,11 +287,25 @@
+         }
+ 
+         _instance._settings = PluginSettings.Load();
++
++        // ApiClient 在构造时持有的是「配置对象」的引用，而非逐次读取插件字段。
++        // 上面这一行只是把插件自己的字段指向了新对象，客户端手里那份仍指向旧对象，
++        // 于是改了服务器地址却依旧发往旧地址——表现为「必须重启宿主才生效」。
++        // 这里同步重建客户端，让它拿到新对象。
++        // 注意 ownsClient: false，HttpClient 由插件持有，重建客户端不会把它释放掉。
++        if (_instance._httpClient != null)
++        {
++            _instance._apiClient?.Dispose();
++            _instance._apiClient = new ApiClient(
++                _instance._httpClient, _instance._settings, ownsClient: false);
++        }
++
+         _instance._lastStatusSendTime = DateTime.MinValue;
+         _instance._lastScheduleTimerSendTime = DateTime.MinValue;
+         _instance._lastHeartbeatSendTime = DateTime.MinValue;
+         _instance._lastScheduleSendTime = DateTime.MinValue;
+         Logger.MaskSensitive = _instance._settings.MaskSensitiveInLog;
++        Logger.SensitiveLiterals = Logger.BuildSensitiveLiterals(_instance._settings.ServerUrl);
+         Logger.Info("配置已重新加载并立即生效");
+     }
+ 
+diff --color -ruN a/Services/RequestSigner.cs b/Services/RequestSigner.cs
+--- a/Services/RequestSigner.cs	2026-10-13 22:17:51.394497773 +0800
++++ b/Services/RequestSigner.cs	2026-10-13 22:17:51.393497792 +0800
+@@ -0,0 +1,119 @@
++using System;
++using System.Security.Cryptography;
++using System.Text;
++
++namespace CICUser;
++
++/// <summary>
++/// 请求签名器（方案 A：共享密钥 + 时间戳 + 随机数）。
++/// </summary>
++/// <remarks>
++/// <para>
++/// 要解决的问题：设备ID 原本既是「身份标识」又是「认证凭据」，
++/// 一旦被第三方看到（抓包、看服务端数据库、翻日志），就能被永久冒用，
++/// 而服务端无从分辨。本类把这两件事拆开——
++/// 身份仍用设备ID 声明，凭据改用「每次请求现算、且只在一小段时间内有效」的签名。
++/// </para>
++/// <para>
++/// 签名覆盖四元组：设备ID、时间戳、随机数、请求体的 SHA-256。
++/// 共享密钥<b>从不随报文发送</b>，只在两端各存一份，
++/// 因此截获报文的人无法伪造新请求。
++/// </para>
++/// <para>
++/// 与 HMAC 的对应关系：算法固定 HMAC-SHA256，
++/// 与被签名内容拼接方式见 <see cref="BuildCanonical"/>。
++/// 服务端必须按完全相同的规则重算，否则校验不通过。
++/// </para>
++/// </remarks>
++internal static class RequestSigner
++{
++    /// <summary>协议版本，随签名规则一起发送，便于服务端日后平滑演进。</summary>
++    public const string SchemeVersion = "1";
++
++    /// <summary>请求头名称：签名协议版本。</summary>
++    public const string HeaderVersion = "X-CIC-Scheme";
++
++    /// <summary>请求头名称：设备ID，服务端据此取出对应密钥。</summary>
++    public const string HeaderDevice = "X-CIC-Device";
++
++    /// <summary>请求头名称：Unix 秒级时间戳。</summary>
++    public const string HeaderTimestamp = "X-CIC-Timestamp";
++
++    /// <summary>请求头名称：本次请求的随机数。</summary>
++    public const string HeaderNonce = "X-CIC-Nonce";
++
++    /// <summary>请求头名称：签名值。</summary>
++    public const string HeaderSignature = "X-CIC-Signature";
++
++    /// <summary>随机数字节数。16 字节即 128 位，碰撞概率可忽略。</summary>
++    private const int NonceBytes = 16;
++
++    /// <summary>一次签名所需的全部要素。</summary>
++    /// <param name="Timestamp">Unix 秒级时间戳字符串。</param>
++    /// <param name="Nonce">随机数（大写十六进制）。</param>
++    /// <param name="Signature">签名值（大写十六进制）。</param>
++    public readonly record struct SignedRequest(string Timestamp, string Nonce, string Signature);
++
++    /// <summary>
++    /// 为一次请求生成签名。
++    /// </summary>
++    /// <param name="secret">共享密钥。</param>
++    /// <param name="deviceId">设备ID。</param>
++    /// <param name="body">即将发送的请求体原文。</param>
++    /// <returns>时间戳、随机数与签名。</returns>
++    public static SignedRequest Sign(string secret, string deviceId, string body)
++    {
++        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
++        var nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(NonceBytes));
++        var signature = Compute(secret, deviceId, timestamp, nonce, body);
++
++        return new SignedRequest(timestamp, nonce, signature);
++    }
++
++    /// <summary>
++    /// 按固定规则计算签名值。服务端用同一规则校验。
++    /// </summary>
++    /// <param name="secret">共享密钥。</param>
++    /// <param name="deviceId">设备ID。</param>
++    /// <param name="timestamp">Unix 秒级时间戳。</param>
++    /// <param name="nonce">随机数。</param>
++    /// <param name="body">请求体原文。</param>
++    /// <returns>大写十六进制签名值。</returns>
++    public static string Compute(
++        string secret, string deviceId, string timestamp, string nonce, string body)
++    {
++        // 先对请求体取 SHA-256，再把摘要送进 HMAC。
++        // 这样做有两个好处：一是被签名的串长度固定，不受报文大小影响；
++        // 二是先摘要再签名可避免直接对超长内容做 HMAC 带来的额外开销。
++        var bodyHash = Convert.ToHexString(
++            SHA256.HashData(Encoding.UTF8.GetBytes(body ?? "")));
++
++        var canonical = BuildCanonical(deviceId, timestamp, nonce, bodyHash);
++
++        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
++        return Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(canonical)));
++    }
++
++    /// <summary>
++    /// 构造被签名的规范串。四个字段以换行分隔，顺序固定。
++    /// </summary>
++    /// <remarks>
++    /// 换行符在设备ID、时间戳、随机数、摘要里都不可能自然出现
++    /// （前三者是受限字符集，后者是十六进制），
++    /// 因此不存在「字段边界被顶掉」的拼接歧义。
++    /// </remarks>
++    private static string BuildCanonical(
++        string deviceId, string timestamp, string nonce, string bodyHash)
++        => string.Concat(
++            deviceId ?? "", "\n",
++            timestamp ?? "", "\n",
++            nonce ?? "", "\n",
++            bodyHash);
++
++    /// <summary>
++    /// 生成一个新的共享密钥（128 位随机数的十六进制表示）。
++    /// </summary>
++    /// <returns>32 个字符的大写十六进制串。</returns>
++    public static string GenerateSecret()
++        => Convert.ToHexString(RandomNumberGenerator.GetBytes(NonceBytes));
++}
+diff --color -ruN a/Settings.cs b/Settings.cs
+--- a/Settings.cs	2026-10-13 22:17:51.389497869 +0800
++++ b/Settings.cs	2026-10-13 22:17:51.388497888 +0800
+@@ -131,6 +131,24 @@
+     /// <summary>允许使用明文 HTTP（未加密）服务器地址。</summary>
+     public bool AllowInsecureHttp { get; set; } = true;
+ 
++    // ── 请求签名（方案 A：共享密钥 + 时间戳 + 随机数）──
++    /// <summary>
++    /// 是否启用请求签名。默认关闭，避免影响尚未实现校验的服务端。
++    /// 开启后每次上报都会附带签名头，服务端校验不通过即拒绝，
++    /// 使截获到的设备ID 无法被长期冒用。
++    /// </summary>
++    public bool SignatureEnabled { get; set; } = false;
++
++    /// <summary>
++    /// 与设备ID 配对的共享密钥。
++    /// </summary>
++    /// <remarks>
++    /// <b>该值不会随任何报文发送</b>，只与本机配置和服务端各存一份，
++    /// 因此即便有人抓到全部上报内容，也拿不到它、无法伪造新请求。
++    /// 导出配置时会主动清空该字段，防止凭据随分发的配置文件外流。
++    /// </remarks>
++    public string DeviceSecret { get; set; } = "";
++
+     // ── 报文模板 ──
+     /// <summary>状态报文模板。</summary>
+     public MessageTemplate StatusTemplate { get; set; } = MessageTemplate.CreateDefault();
+@@ -526,6 +544,9 @@
+         // 地址自带路径（如 http://host:8080/base）是允许的，拼接时只保留其前缀。
+         ServerUrl = NormalizeServerUrl(ServerUrl);
+ 
++        // 共享密钥是十六进制串，去掉粘贴时可能夹带的空白与不可见字符
++        DeviceSecret = TextSanitizer.CleanStrict(DeviceSecret, alsoRemoveWhitespace: true);
++
+         // 模板内的路径与字段名同样需要规范化，否则用户改坏一处就能让整条通道失效
+         foreach (var t in new[] { StatusTemplate, ScheduleTemplate }
+                      .Concat(StatusTemplates)
+@@ -697,11 +718,22 @@
+     /// <summary>
+     /// 导出当前配置到指定文件，供批量部署时复制到其它教室设备。
+     /// </summary>
++    /// <remarks>
++    /// 导出件常被当作「教学资料」在群里分发，因此这里主动清空共享密钥：
++    /// 凭据一旦跟着配置文件外流，签名机制也就形同虚设。
++    /// 导入方需要在服务端单独登记自己的密钥。
++    /// </remarks>
+     public static bool ExportTo(string filePath, PluginSettings settings)
+     {
+         try
+         {
+-            var json = JsonSerializer.Serialize(settings, WriteOptions);
++            // 先序列化再反序列化，得到一份深拷贝，避免改动到正在使用的配置对象
++            var snapshot = JsonSerializer.Serialize(settings, WriteOptions);
++            var safe = JsonSerializer.Deserialize<PluginSettings>(snapshot, ReadOptions)
++                       ?? new PluginSettings();
++            safe.DeviceSecret = "";
++
++            var json = JsonSerializer.Serialize(safe, WriteOptions);
+             File.WriteAllText(filePath, json);
+             return true;
+         }
+diff --color -ruN a/Views/SettingsPages/CICUserAdvancedSettingsPage.axaml b/Views/SettingsPages/CICUserAdvancedSettingsPage.axaml
+--- a/Views/SettingsPages/CICUserAdvancedSettingsPage.axaml	2026-10-13 22:17:51.435496985 +0800
++++ b/Views/SettingsPages/CICUserAdvancedSettingsPage.axaml	2026-10-13 22:17:51.434497005 +0800
+@@ -521,6 +521,33 @@
+                             </StackPanel>
+                         </Border>
+ 
++                        <TextBlock Classes="fieldLabel" Text="请求签名" FontWeight="SemiBold"
++                                   Margin="0,6,0,0"/>
++                        <Border Classes="readout">
++                            <StackPanel Spacing="8">
++                                <CheckBox x:Name="SignatureEnabledCheckBox"
++                                          Content="启用请求签名（防止设备ID 被他人冒用）"
++                                          Click="SignatureEnabledCheckBox_Click"/>
++                                <TextBlock Classes="hint" TextWrapping="Wrap"
++                                           Text="开启后每次上报都会附带由共享密钥算出的一次性签名，服务端校验通过才接受。密钥只存在本机与服务端，从不随报文发送，因此即便上报内容被截获也无法伪造请求。"/>
++
++                                <Grid ColumnDefinitions="*,10,Auto,Auto">
++                                    <TextBox Grid.Column="0" x:Name="DeviceSecretTextBox"
++                                             Watermark="填与服务端登记一致的共享密钥"
++                                             FontFamily="Cascadia Mono,Consolas,monospace"/>
++                                    <Button Grid.Column="2" x:Name="GenerateSecretButton"
++                                            Content="生成新密钥" Height="34" Padding="14,0"
++                                            Click="GenerateSecretButton_Click"/>
++                                    <Button Grid.Column="3" x:Name="CopySecretButton"
++                                            Content="复制" Height="34" Padding="14,0"
++                                            Margin="8,0,0,0" Click="CopySecretButton_Click"/>
++                                </Grid>
++                                <TextBlock x:Name="SignatureHintText" Classes="hint"
++                                           TextWrapping="Wrap"
++                                           Text="更换密钥后需在服务端同步更新，否则上报会被拒绝。若怀疑整份配置（含密钥）已经外泄，请同时重置设备ID 并在服务端删除旧设备记录。"/>
++                            </StackPanel>
++                        </Border>
++
+                         <TextBlock Classes="fieldLabel" Text="当前日志文件" FontWeight="SemiBold"
+                                    Margin="0,6,0,0"/>
+                         <Border Classes="readout">
+diff --color -ruN a/Views/SettingsPages/CICUserAdvancedSettingsPage.axaml.cs b/Views/SettingsPages/CICUserAdvancedSettingsPage.axaml.cs
+--- a/Views/SettingsPages/CICUserAdvancedSettingsPage.axaml.cs	2026-10-13 22:17:51.441496870 +0800
++++ b/Views/SettingsPages/CICUserAdvancedSettingsPage.axaml.cs	2026-10-13 22:17:51.439496909 +0800
+@@ -146,10 +146,51 @@
+         MaskSensitiveCheckBox.IsChecked = _settings.MaskSensitiveInLog;
+         AllowInsecureHttpCheckBox.IsChecked = _settings.AllowInsecureHttp;
+ 
++        SignatureEnabledCheckBox.IsChecked = _settings.SignatureEnabled;
++        DeviceSecretTextBox.Text = _settings.DeviceSecret;
++        UpdateSignatureHint();
++
+         LogPathText.Text = Logger.CurrentLogPath;
+         UpdateInsecureHttpHint();
+     }
+ 
++    /// <summary>
++    /// 刷新请求签名下方的状态提示。
++    /// </summary>
++    /// <remarks>
++    /// 「开了开关却没填密钥」是配置上最容易漏的一步：此时客户端会在本地
++    /// 直接拒绝发送（见 ApiClient.ValidateConnection），提示必须说清原因，
++    /// 否则用户只会看到上报一直失败而不知为何。
++    /// </remarks>
++    private void UpdateSignatureHint()
++    {
++        var enabled = SignatureEnabledCheckBox.IsChecked == true;
++        var hasSecret = !string.IsNullOrWhiteSpace(DeviceSecretTextBox.Text);
++
++        if (enabled && !hasSecret)
++        {
++            SignatureHintText.Text = "已启用签名但共享密钥为空，上报会在本地被拒绝。请点「生成新密钥」" +
++                                     "并在服务端登记同一份密钥。";
++            SignatureHintText.Foreground = new Avalonia.Media.SolidColorBrush(
++                Avalonia.Media.Color.Parse("#C62828"));
++            return;
++        }
++
++        if (enabled)
++        {
++            SignatureHintText.Text = "签名已启用。请确认服务端已为该设备ID 登记同一份密钥，" +
++                                     "否则上报会被服务端拒绝。";
++            SignatureHintText.Foreground = new Avalonia.Media.SolidColorBrush(
++                Avalonia.Media.Color.Parse("#2E7D32"));
++            return;
++        }
++
++        SignatureHintText.Text = "更换密钥后需在服务端同步更新，否则上报会被拒绝。" +
++                                 "若怀疑整份配置（含密钥）已经外泄，请同时重置设备ID 并在服务端删除旧设备记录。";
++        SignatureHintText.Foreground = new Avalonia.Media.SolidColorBrush(
++            Avalonia.Media.Color.Parse("#6B6B6B"));
++    }
++
+     /// <summary>回显报文模板相关控件。</summary>
+     private void LoadTemplateFields()
+     {
+@@ -983,6 +1024,49 @@
+ 
+         _settings.MaskSensitiveInLog = MaskSensitiveCheckBox.IsChecked == true;
+         _settings.AllowInsecureHttp = AllowInsecureHttpCheckBox.IsChecked == true;
++
++        _settings.SignatureEnabled = SignatureEnabledCheckBox.IsChecked == true;
++        _settings.DeviceSecret = (DeviceSecretTextBox.Text ?? "").Trim();
++    }
++
++    /// <summary>
++    /// 切换签名开关时即时刷新提示，避免用户在「开了却没填密钥」的状态下反复试错。
++    /// </summary>
++    private void SignatureEnabledCheckBox_Click(object? sender, RoutedEventArgs e)
++        => UpdateSignatureHint();
++
++    /// <summary>
++    /// 生成一份新的共享密钥并回填到输入框。
++    /// </summary>
++    /// <remarks>
++    /// 只换密钥、不动设备ID：签名机制下密钥才是凭据，
++    /// 仅轮换密钥就足以让此前泄漏的报文彻底作废，
++    /// 而设备ID 保持不变可以让服务端少改一处记录。
++    /// </remarks>
++    private void GenerateSecretButton_Click(object? sender, RoutedEventArgs e)
++    {
++        DeviceSecretTextBox.Text = RequestSigner.GenerateSecret();
++        UpdateSignatureHint();
++        ShowMessage("已生成新密钥，请复制后在服务端登记（保存后生效）。", isError: false);
++    }
++
++    private void CopySecretButton_Click(object? sender, RoutedEventArgs e)
++    {
++        var secret = (DeviceSecretTextBox.Text ?? "").Trim();
++        if (secret.Length == 0)
++        {
++            ShowMessage("密钥为空，请先点「生成新密钥」。", isError: true);
++            return;
++        }
++
++        if (SettingsDisplayHelper.TrySetClipboardText(this, secret))
++        {
++            ShowMessage("密钥已复制到剪贴板。", isError: false);
++        }
++        else
++        {
++            ShowMessage("无法访问剪贴板，请手动选中密钥文本复制。", isError: true);
++        }
+     }
+ 
+     // ── 报文模板编辑 ──

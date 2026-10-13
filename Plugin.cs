@@ -128,6 +128,7 @@ public class Plugin : PluginBase
 
         _settings = PluginSettings.Load();
         Logger.MaskSensitive = _settings.MaskSensitiveInLog;
+        Logger.SensitiveLiterals = Logger.BuildSensitiveLiterals(_settings.ServerUrl);
 
         // 首次运行或配置缺失时自动生成设备ID 并落盘。
         // 已有值一律保留，避免覆盖老用户的手填标识。
@@ -286,11 +287,25 @@ public class Plugin : PluginBase
         }
 
         _instance._settings = PluginSettings.Load();
+
+        // ApiClient 在构造时持有的是「配置对象」的引用，而非逐次读取插件字段。
+        // 上面这一行只是把插件自己的字段指向了新对象，客户端手里那份仍指向旧对象，
+        // 于是改了服务器地址却依旧发往旧地址——表现为「必须重启宿主才生效」。
+        // 这里同步重建客户端，让它拿到新对象。
+        // 注意 ownsClient: false，HttpClient 由插件持有，重建客户端不会把它释放掉。
+        if (_instance._httpClient != null)
+        {
+            _instance._apiClient?.Dispose();
+            _instance._apiClient = new ApiClient(
+                _instance._httpClient, _instance._settings, ownsClient: false);
+        }
+
         _instance._lastStatusSendTime = DateTime.MinValue;
         _instance._lastScheduleTimerSendTime = DateTime.MinValue;
         _instance._lastHeartbeatSendTime = DateTime.MinValue;
         _instance._lastScheduleSendTime = DateTime.MinValue;
         Logger.MaskSensitive = _instance._settings.MaskSensitiveInLog;
+        Logger.SensitiveLiterals = Logger.BuildSensitiveLiterals(_instance._settings.ServerUrl);
         Logger.Info("配置已重新加载并立即生效");
     }
 
