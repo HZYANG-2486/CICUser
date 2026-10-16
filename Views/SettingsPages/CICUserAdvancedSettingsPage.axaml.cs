@@ -148,7 +148,10 @@ public partial class CICUserAdvancedSettingsPage : SettingsPageBase
 
         SignatureEnabledCheckBox.IsChecked = _settings.SignatureEnabled;
         DeviceSecretTextBox.Text = _settings.DeviceSecret;
+        AutoEnrollCheckBox.IsChecked = _settings.AutoEnroll;
+        CertificateFingerprintTextBox.Text = _settings.ServerCertificateFingerprint;
         UpdateSignatureHint();
+        UpdateEnrollmentStatus();
 
         LogPathText.Text = Logger.CurrentLogPath;
         UpdateInsecureHttpHint();
@@ -1027,6 +1030,8 @@ public partial class CICUserAdvancedSettingsPage : SettingsPageBase
 
         _settings.SignatureEnabled = SignatureEnabledCheckBox.IsChecked == true;
         _settings.DeviceSecret = (DeviceSecretTextBox.Text ?? "").Trim();
+        _settings.AutoEnroll = AutoEnrollCheckBox.IsChecked == true;
+        _settings.ServerCertificateFingerprint = (CertificateFingerprintTextBox.Text ?? "").Trim();
     }
 
     /// <summary>
@@ -1067,6 +1072,87 @@ public partial class CICUserAdvancedSettingsPage : SettingsPageBase
         {
             ShowMessage("无法访问剪贴板，请手动选中密钥文本复制。", isError: true);
         }
+    }
+
+    /// <summary>
+    /// 手动触发一次自动注册。
+    /// </summary>
+    /// <remarks>
+    /// 先把界面上的改动收进配置再注册——否则用户刚改的服务器地址或证书指纹
+    /// 不会生效，注册会拿着旧配置去连一个早已不存在的地址。
+    /// </remarks>
+    private async void AutoEnrollButton_Click(object? sender, RoutedEventArgs e)
+    {
+        CommitSafetyFields();
+        _settings.Save();
+
+        AutoEnrollButton.IsEnabled = false;
+        SetEnrollmentStatusText("正在注册…", "#6B6B6B");
+
+        try
+        {
+            await Plugin.TryAutoEnrollAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("手动注册失败", ex);
+        }
+        finally
+        {
+            AutoEnrollButton.IsEnabled = true;
+        }
+
+        // 注册写盘的是另一个配置对象，这里重新读一份以取回最新密钥
+        _settings = PluginSettings.Load();
+        DeviceSecretTextBox.Text = _settings.DeviceSecret;
+        UpdateSignatureHint();
+        UpdateEnrollmentStatus();
+    }
+
+    /// <summary>
+    /// 刷新注册状态提示。
+    /// </summary>
+    /// <remarks>
+    /// 三种状态各有对应文案：已吊销（红）、已持有密钥（绿）、尚未注册（灰）。
+    /// 吊销态单独列出，因为它需要用户去服务端处理，不是本机重试能解决的。
+    /// </remarks>
+    private void UpdateEnrollmentStatus()
+    {
+        if (EnrollmentStatusText == null)
+        {
+            return;
+        }
+
+        if (_settings.EnrollmentRejected)
+        {
+            SetEnrollmentStatusText(
+                "已被服务端吊销，上报与自动注册均已停止。服务端恢复该设备后，清空配置里的吊销标记即可重新上线。",
+                "#C62828");
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_settings.DeviceSecret))
+        {
+            SetEnrollmentStatusText(
+                string.IsNullOrWhiteSpace(_settings.EnrollmentMessage)
+                    ? "已持有密钥。"
+                    : _settings.EnrollmentMessage,
+                "#2E7D32");
+            return;
+        }
+
+        SetEnrollmentStatusText(
+            string.IsNullOrWhiteSpace(_settings.EnrollmentMessage)
+                ? "尚未注册。开启签名与自动注册后，重启宿主或点「立即注册」。"
+                : _settings.EnrollmentMessage,
+            "#6B6B6B");
+    }
+
+    private void SetEnrollmentStatusText(string text, string colorHex)
+    {
+        EnrollmentStatusText.Text = text;
+        EnrollmentStatusText.Foreground = new Avalonia.Media.SolidColorBrush(
+            Avalonia.Media.Color.Parse(colorHex));
     }
 
     // ── 报文模板编辑 ──
@@ -1407,7 +1493,18 @@ public partial class CICUserAdvancedSettingsPage : SettingsPageBase
         RefreshPreview();
         RefreshScheduleFormatPreview();
 
-        ShowMessage($"已切换到配置「{name}」，原授权状态已重置，请重新申请授权。", isError: false);
+        // 预设是「协议档位」，措辞要与完整配置切换区分开，
+        // 否则用户会以为服务器地址也被一起换掉了。
+        var applied = _settings.SavedProfiles.FirstOrDefault(x => x.Name == name);
+        if (applied?.IsBuiltInPreset == true)
+        {
+            ShowMessage($"已套用协议预设「{name}」。服务器地址等连接参数保持不变，" +
+                        "请确认地址与密钥符合该档位的要求。", isError: false);
+        }
+        else
+        {
+            ShowMessage($"已切换到配置「{name}」，原授权状态已重置，请重新申请授权。", isError: false);
+        }
     }
 
     private void SaveProfileButton_Click(object? sender, RoutedEventArgs e)

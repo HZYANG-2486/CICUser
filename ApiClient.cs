@@ -201,6 +201,77 @@ public class ApiClient : IDisposable
         Logger.Warning($"{scene}报文构建提示：{string.Join("；", issues)}");
     }
 
+    /// <summary>
+    /// 向服务端注册本设备并提交新密钥（TLS 之上的一次性密钥分发）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 这是<b>唯一一次</b>密钥经过网络的调用，因此要求 https ——
+    /// 整条链路的防护上限就等于这一步的传输层是否可信。
+    /// 注册成功后密钥只留在本机，之后所有上报改用签名头，密钥再不出网。
+    /// </para>
+    /// <para>
+    /// 请求体里的 Secret 同时充当<b>幂等令牌</b>：网络超时导致的重试
+    /// 会带着同一个 Secret 再来一次，服务端据此返回成功而非「已注册」错误，
+    /// 设备不会把自己锁死。
+    /// </para>
+    /// <para>
+    /// 本方法刻意<b>不</b>走 <see cref="ValidateConnection"/>：注册时本就还没有密钥，
+    /// 沿用那套校验会被「已启用签名但密钥为空」直接挡下。
+    /// </para>
+    /// </remarks>
+    /// <param name="secret">本机新生成的密钥。</param>
+    /// <param name="cancellationToken">取消标记。</param>
+    /// <returns>服务端响应。</returns>
+    public async Task<ApiResponse> EnrollAsync(
+        string secret, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(_settings.ServerUrl))
+        {
+            return ApiResponse.Fail("服务器地址为空");
+        }
+
+        if (string.IsNullOrWhiteSpace(_settings.DeviceId))
+        {
+            return ApiResponse.Fail("设备ID为空");
+        }
+
+        if (string.IsNullOrWhiteSpace(secret))
+        {
+            return ApiResponse.Fail("待注册的密钥为空");
+        }
+
+        var path = string.IsNullOrWhiteSpace(_settings.EnrollEndpoint)
+            ? "/class/api/enroll"
+            : _settings.EnrollEndpoint;
+
+        // 注册是唯一一次把密钥交给服务端的调用，因此必须走 https——
+        // 明文通道下这一步等于把密钥直接摊在网上，之后所有签名都形同虚设。
+        // 注意这条限制<b>只针对注册</b>：普通上报允许明文，
+        // 那是刻意保留的「手输密钥 + 服务端未上 TLS」兼容档位。
+        var enrollUrl = path.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+            ? path
+            : GetBaseUrl() + path;
+
+        if (!enrollUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return ApiResponse.Fail(
+                "自动注册必须使用 https:// 地址：注册会把密钥提交给服务端，明文传输将使其失去防护意义。");
+        }
+
+        var payload = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["DeviceId"] = _settings.DeviceId,
+            ["DeviceName"] = _settings.DeviceName,
+            ["ClassName"] = _settings.ClassName,
+            ["Secret"] = secret,
+            ["ClientVersion"] = typeof(ApiClient).Assembly.GetName().Version?.ToString() ?? "",
+            ["Scheme"] = RequestSigner.SchemeVersion
+        };
+
+        return await PostJsonAsync(path, payload, cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task<ApiResponse> PostJsonAsync(string path, object payload, CancellationToken cancellationToken)
     {
         var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions
@@ -291,11 +362,6 @@ public class ApiClient : IDisposable
     /// <param name="path">端点相对路径，可为空（只校验服务器地址）。</param>
     private string? CheckInsecureHttpFor(string path)
     {
-        if (_settings.AllowInsecureHttp)
-        {
-            return null;
-        }
-
         var baseUrl = GetBaseUrl();
         if (string.IsNullOrWhiteSpace(baseUrl))
         {
@@ -304,6 +370,11 @@ public class ApiClient : IDisposable
         }
 
         var full = string.IsNullOrEmpty(path) ? baseUrl : baseUrl + path;
+
+        if (_settings.AllowInsecureHttp)
+        {
+            return null;
+        }
 
         if (full.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
         {

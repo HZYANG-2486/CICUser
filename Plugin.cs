@@ -224,7 +224,10 @@ public class Plugin : PluginBase
 
     private void OnAppStarted(object? sender, EventArgs e)
     {
-        _httpClient = new HttpClient();
+        // 处理器按配置决定证书校验策略：未绑定指纹时走系统信任链，
+        // 绑定了指纹则只认那一张证书（自签证书场景）。
+        // 这一步不能省略——证书校验若被绕过，TLS 就只是心理安慰。
+        _httpClient = new HttpClient(CertificateTrust.CreateHandler(_settings));
         _apiClient = new ApiClient(_httpClient, _settings, ownsClient: false);
 
         _lessonsService = IAppHost.GetService<ILessonsService>();
@@ -238,8 +241,115 @@ public class Plugin : PluginBase
         SubscribeScheduleChanges();
 
         Logger.Info("已订阅课堂事件与课表变更");
-        _ = SendScheduleAsync("启动");
-        _ = SendStatusAsync();
+        _ = BootstrapAsync();
+    }
+
+    /// <summary>
+    /// 启动流程：先把密钥准备好，再发首轮上报。
+    /// </summary>
+    /// <remarks>
+    /// 顺序不能反。若先上报，则「已启用签名但密钥还没拿到」的这一瞬间会被
+    /// 本地校验以「共享密钥为空」拦下，白白丢掉一次启动上报；
+    /// 先注册则首轮上报就是签好名的。
+    /// </remarks>
+    private async Task BootstrapAsync()
+    {
+        try
+        {
+            await TryAutoEnrollAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("自动注册流程异常", ex);
+        }
+
+        await SendScheduleAsync("启动").ConfigureAwait(false);
+        await SendStatusAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 缺少密钥时向服务端注册并领取密钥。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 仅在「已启用签名 + 已开启自动注册 + 尚无密钥」时触发。
+    /// 密钥在本机生成，通过 https 提交给服务端，之后<b>不再经过网络</b>。
+    /// </para>
+    /// <para>
+    /// 服务端以「同一设备提交同一密钥」判定为同一次注册，因此本方法可以安全重试：
+    /// 请求发出但响应丢失时，下一次带着相同密钥重发不会被当成冒名顶替。
+    /// </para>
+    /// </remarks>
+    /// <returns>是否已获得可用密钥。</returns>
+    public static async Task<bool> TryAutoEnrollAsync()
+    {
+        var instance = _instance;
+        var settings = instance?._settings;
+
+        if (instance?._apiClient == null || settings == null)
+        {
+            return false;
+        }
+
+        if (!settings.SignatureEnabled || !settings.AutoEnroll)
+        {
+            return false;
+        }
+
+        // 已经有密钥就不再打扰服务端
+        if (!string.IsNullOrWhiteSpace(settings.DeviceSecret))
+        {
+            return false;
+        }
+
+        if (settings.EnrollmentRejected)
+        {
+            Logger.Warning("设备已被服务端吊销，跳过自动注册；在服务端恢复后清除吊销标记再试");
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.ServerUrl))
+        {
+            return false;
+        }
+
+        var secret = RequestSigner.GenerateSecret();
+        Logger.Info($"未检测到共享密钥，正在向服务端注册设备 {settings.DeviceId}");
+
+        ApiResponse response;
+        try
+        {
+            response = await instance._apiClient.EnrollAsync(secret).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("自动注册请求异常", ex);
+            return false;
+        }
+
+        if (response.IsSuccess)
+        {
+            settings.DeviceSecret = secret;
+            settings.EnrollmentRejected = false;
+            settings.EnrollmentMessage = "已自动注册并领取密钥";
+            settings.Save();
+
+            // 重建客户端，让签名立即生效，无需重启宿主
+            ReloadSettings();
+            Logger.Info("自动注册成功，密钥已保存在本机，之后不再经过网络");
+            return true;
+        }
+
+        settings.EnrollmentMessage = response.Message;
+        if (response.Code is 401 or 403)
+        {
+            // 服务端明确拒绝，多半是已被吊销；置位后不再反复注册
+            settings.EnrollmentRejected = true;
+        }
+
+        settings.Save();
+        Logger.Warning($"自动注册失败：{response.Message}");
+        return false;
     }
 
     private void OnAppStopping(object? sender, EventArgs e)
@@ -1195,6 +1305,10 @@ public class Plugin : PluginBase
     /// </summary>
     private void HandleAuthRejection(ApiResponse response, string scene)
     {
+        // 启用签名后，401/403 意味着服务端不再接受这把密钥（通常是被吊销）。
+        // 先记下吊销状态，再走原有的授权拒绝处理——两者互不影响。
+        NoteEnrollmentRejection(response, scene);
+
         if (response.Code != 403)
         {
             return;
@@ -1204,5 +1318,39 @@ public class Plugin : PluginBase
         _settings.AuthStatus = "rejected";
         _settings.AuthMessage = response.Message;
         _settings.Save();
+    }
+
+    /// <summary>
+    /// 服务端明确拒绝时记录吊销状态，避免设备持续冲击服务端。
+    /// </summary>
+    /// <remarks>
+    /// 仅在<b>已启用签名</b>时判定。未启用签名时 401/403 属于服务端自身的授权逻辑，
+    /// 与密钥吊销无关；误判会让设备白白停掉自动注册。
+    /// </remarks>
+    /// <param name="response">服务端响应。</param>
+    /// <param name="scene">场景名，用于日志与提示。</param>
+    private void NoteEnrollmentRejection(ApiResponse response, string scene)
+    {
+        if (!_settings.SignatureEnabled)
+        {
+            return;
+        }
+
+        if (response.Code is not (401 or 403))
+        {
+            return;
+        }
+
+        if (_settings.EnrollmentRejected)
+        {
+            return;
+        }
+
+        _settings.EnrollmentRejected = true;
+        _settings.EnrollmentMessage = $"{scene}被服务端拒绝：{response.Message}";
+        _settings.Save();
+
+        Logger.Warning($"{scene}被服务端拒绝（Code={response.Code}），已标记为吊销状态。" +
+                       "在服务端恢复该设备并清空配置里的吊销标记后即可重新上线。");
     }
 }

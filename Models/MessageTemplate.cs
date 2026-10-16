@@ -490,6 +490,36 @@ public class ConfigProfile
     /// <summary>该配置对应的课表报文模板。</summary>
     public MessageTemplate? ScheduleTemplate { get; set; }
 
+    // ── 协议与安全模式（三套内置版本预设靠这几个字段区分）──
+
+    /// <summary>该配置是否启用请求签名。</summary>
+    public bool SignatureEnabled { get; set; } = false;
+
+    /// <summary>
+    /// 该配置是否允许明文 HTTP 服务器地址。
+    /// </summary>
+    /// <remarks>
+    /// 与签名开关组合出两种「向下兼容」档位：
+    /// 关签名 + 允许明文 = 纯设备码（最老的服务端）；
+    /// 开签名 + 允许明文 = 手输密钥且服务端尚未上 TLS。
+    /// </remarks>
+    public bool AllowInsecureHttp { get; set; } = true;
+
+    /// <summary>该配置是否在缺少密钥时自动向服务端注册（要求 https）。</summary>
+    public bool AutoEnroll { get; set; } = false;
+
+    /// <summary>该配置绑定的服务端证书 SHA-256 指纹（空表示走系统信任链）。</summary>
+    public string ServerCertificateFingerprint { get; set; } = "";
+
+    /// <summary>
+    /// 是否为内置的版本预设配置。
+    /// </summary>
+    /// <remarks>
+    /// 内置预设<b>只切换协议与安全模式</b>，不动服务器地址、班级名等连接参数——
+    /// 它们是「协议档位」而不是完整快照；套用完整快照会把当前地址覆盖成过时值。
+    /// </remarks>
+    public bool IsBuiltInPreset { get; set; } = false;
+
     public ConfigProfile Clone() => new()
     {
         Name = Name,
@@ -516,7 +546,12 @@ public class ConfigProfile
             ?? MessageField.CreateScheduleItemDefaults(),
         ScheduleIndexKeyPrefix = ScheduleIndexKeyPrefix,
         StatusTemplate = StatusTemplate?.Clone(),
-        ScheduleTemplate = ScheduleTemplate?.Clone()
+        ScheduleTemplate = ScheduleTemplate?.Clone(),
+        SignatureEnabled = SignatureEnabled,
+        AllowInsecureHttp = AllowInsecureHttp,
+        AutoEnroll = AutoEnroll,
+        ServerCertificateFingerprint = ServerCertificateFingerprint,
+        IsBuiltInPreset = IsBuiltInPreset
     };
 }
 

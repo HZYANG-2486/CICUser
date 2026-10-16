@@ -230,6 +230,9 @@
                     <TextBlock x:Name="MessageText" FontSize="12" TextWrapping="Wrap"/>
                 </Border>
 
+                <TextBlock Classes="hint" Margin="0,4,0,10"
+                           Text="遇到问题？「高级设置」最下方有「新手疑难解答」，覆盖上报失败、格式不匹配、改了地址不生效等常见情况。"/>
+
                 <TextBlock x:Name="UndoHintText" Classes="hint" Margin="0,4,0,0"
                            Text="「撤回上一步」可回退最近的改动（最多 20 步）；「恢复默认」会把上报频率等设置还原，但保留服务器地址与设备ID。"/>
 

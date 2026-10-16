@@ -149,6 +149,48 @@ public class PluginSettings
     /// </remarks>
     public string DeviceSecret { get; set; } = "";
 
+    // ── 自动注册（TLS 之上的一次性密钥分发）──
+    /// <summary>
+    /// 缺少密钥时是否自动向服务端注册并领取密钥。
+    /// </summary>
+    /// <remarks>
+    /// 注册请求会把新密钥发送给服务端，因此<b>要求服务器地址为 https://</b>；
+    /// 用明文 HTTP 注册等于把密钥直接摊在网络上，本地会直接拒绝。
+    /// </remarks>
+    public bool AutoEnroll { get; set; } = true;
+
+    /// <summary>自动注册接口路径。</summary>
+    public string EnrollEndpoint { get; set; } = "/class/api/enroll";
+
+    /// <summary>
+    /// 服务端证书的 SHA-256 指纹（十六进制，可含冒号等分隔符）。
+    /// </summary>
+    /// <remarks>
+    /// 留空表示按<b>系统信任链</b>校验证书——适用于正式 CA 签发的证书，
+    /// 或已把自建 CA 根证书导入设备信任库的情形。
+    /// <para>
+    /// 填写后改为<b>只认这张证书</b>，用于自签证书且不便改动系统信任库的场景。
+    /// 指纹可通过「配置导出」批量分发到其它设备，不必逐台输入。
+    /// </para>
+    /// <para>
+    /// 注意绑定指纹等于放弃了证书吊销与续期：证书一换就要同步更新此值。
+    /// </para>
+    /// </remarks>
+    public string ServerCertificateFingerprint { get; set; } = "";
+
+    /// <summary>最近一次自动注册的结果说明，供界面回显。</summary>
+    public string EnrollmentMessage { get; set; } = "";
+
+    /// <summary>
+    /// 是否已被服务端吊销。
+    /// </summary>
+    /// <remarks>
+    /// 上报收到 401/403 时置位。置位后停止自动注册与上报，
+    /// 避免设备在已被踢出的情况下反复冲击服务端。
+    /// 管理员在服务端恢复该设备后，清空此值即可重新上线。
+    /// </remarks>
+    public bool EnrollmentRejected { get; set; } = false;
+
     // ── 报文模板 ──
     /// <summary>状态报文模板。</summary>
     public MessageTemplate StatusTemplate { get; set; } = MessageTemplate.CreateDefault();
@@ -168,6 +210,15 @@ public class PluginSettings
 
     /// <summary>当前生效配置的名称，用于界面回显。</summary>
     public string CurrentProfileName { get; set; } = "默认配置";
+
+    /// <summary>
+    /// 内置的版本预设配置是否已播种过。
+    /// </summary>
+    /// <remarks>
+    /// 只播种一次：用户若主动删掉某个预设，下次加载不该又冒出来。
+    /// 这与内置报文模板的处理有别——模板删了会补回，因为删模板通常只是误操作。
+    /// </remarks>
+    public bool BuiltInProfilesSeeded { get; set; } = false;
 
     /// <summary>课表上报版本号，每次内容变化后自增，供服务端判断新旧。</summary>
     public int ScheduleVersion { get; set; } = 0;
@@ -515,6 +566,14 @@ public class PluginSettings
             StatusTemplates.Add(MessageTemplate.CreateLegacy());
         }
 
+        // 播种内置的版本预设配置，对应服务端演进的三个阶段。
+        // 只播一次：用户删掉某个预设后，不该在下次加载时又冒出来。
+        if (!BuiltInProfilesSeeded)
+        {
+            SeedBuiltInProfiles();
+            BuiltInProfilesSeeded = true;
+        }
+
         // ── 频率范围钳制（下限保护，避免误设导致请求风暴）──
         if (StatusSendIntervalSeconds < MinStatusIntervalSeconds)
         {
@@ -546,6 +605,11 @@ public class PluginSettings
 
         // 共享密钥是十六进制串，去掉粘贴时可能夹带的空白与不可见字符
         DeviceSecret = TextSanitizer.CleanStrict(DeviceSecret, alsoRemoveWhitespace: true);
+
+        // 自动注册接口与证书指纹。指纹统一成「大写、无分隔符」，
+        // 因为用户从浏览器 / openssl 复制过来的格式五花八门，直接比对会误判。
+        EnrollEndpoint = NormalizeEndpoint(EnrollEndpoint, "/class/api/enroll");
+        ServerCertificateFingerprint = NormalizeFingerprint(ServerCertificateFingerprint);
 
         // 模板内的路径与字段名同样需要规范化，否则用户改坏一处就能让整条通道失效
         foreach (var t in new[] { StatusTemplate, ScheduleTemplate }
@@ -805,7 +869,14 @@ public class PluginSettings
                 ?? MessageField.CreateScheduleItemDefaults(),
             ScheduleIndexKeyPrefix = ScheduleIndexKeyPrefix,
             StatusTemplate = StatusTemplate?.Clone(),
-            ScheduleTemplate = ScheduleTemplate?.Clone()
+            ScheduleTemplate = ScheduleTemplate?.Clone(),
+
+            // 用户自己保存的配置是完整快照，协议与安全模式一并存下
+            SignatureEnabled = SignatureEnabled,
+            AllowInsecureHttp = AllowInsecureHttp,
+            AutoEnroll = AutoEnroll,
+            ServerCertificateFingerprint = ServerCertificateFingerprint,
+            IsBuiltInPreset = false
         };
 
         var existing = SavedProfiles.FirstOrDefault(x => x.Name == name);
@@ -829,6 +900,13 @@ public class PluginSettings
         if (profile == null)
         {
             return false;
+        }
+
+        // 内置预设是「协议档位」，只切协议与安全模式。
+        // 套用它的连接参数会把当前地址、班级名覆盖成播种时的旧值，那并非用户所要。
+        if (profile.IsBuiltInPreset)
+        {
+            return ApplyBuiltInPreset(profile);
         }
 
         ServerUrl = profile.ServerUrl;
@@ -879,6 +957,76 @@ public class PluginSettings
         return true;
     }
 
+    /// <summary>内置预设：纯设备码版本（最老的服务端，不做任何校验）。</summary>
+    public const string PresetDeviceIdOnly = "兼容：纯设备码（无签名）";
+
+    /// <summary>内置预设：手输密钥版本（服务端已校验签名，但尚未上 TLS）。</summary>
+    public const string PresetManualSecret = "兼容：手输密钥（明文 HTTP）";
+
+    /// <summary>内置预设：自动注册版本（服务端已上 TLS）。</summary>
+    public const string PresetAutoEnroll = "推荐：自动注册（TLS）";
+
+    /// <summary>
+    /// 套用内置的版本预设：只改协议与安全模式，连接参数原样保留。
+    /// </summary>
+    /// <param name="profile">内置预设。</param>
+    /// <returns>恒为 true。</returns>
+    private bool ApplyBuiltInPreset(ConfigProfile profile)
+    {
+        SignatureEnabled = profile.SignatureEnabled;
+        AllowInsecureHttp = profile.AllowInsecureHttp;
+        AutoEnroll = profile.AutoEnroll;
+
+        // 指纹只在预设给出非空值时才覆盖，免得把用户已经填好的指纹抹掉
+        if (!string.IsNullOrWhiteSpace(profile.ServerCertificateFingerprint))
+        {
+            ServerCertificateFingerprint = profile.ServerCertificateFingerprint;
+        }
+
+        CurrentProfileName = profile.Name;
+
+        // 协议变了，服务端对这台设备的授权结论也随之作废
+        AuthStatus = "pending";
+        AuthMessage = "";
+        return true;
+    }
+
+    /// <summary>
+    /// 播种三套版本预设配置，对应服务端演进的三个阶段。
+    /// </summary>
+    /// <remarks>
+    /// 三者的差别只在「签名」与「明文 HTTP」两个开关的组合：
+    /// <list type="bullet">
+    /// <item>纯设备码——不启用签名，服务端只凭设备ID 认人；</item>
+    /// <item>手输密钥——启用签名但允许明文 HTTP，密钥由人工填写，应对尚未上 TLS 的服务端；</item>
+    /// <item>自动注册——启用签名、禁止明文、开启自动注册，配合 TLS 做到零人工分发。</item>
+    /// </list>
+    /// 预设不携带服务器地址等连接参数，切换时只换协议档位。
+    /// </remarks>
+    private void SeedBuiltInProfiles()
+    {
+        Add(PresetDeviceIdOnly, signature: false, insecureHttp: true, autoEnroll: false);
+        Add(PresetManualSecret, signature: true, insecureHttp: true, autoEnroll: false);
+        Add(PresetAutoEnroll, signature: true, insecureHttp: false, autoEnroll: true);
+
+        void Add(string name, bool signature, bool insecureHttp, bool autoEnroll)
+        {
+            if (SavedProfiles.Any(x => x.Name == name))
+            {
+                return;
+            }
+
+            SavedProfiles.Add(new ConfigProfile
+            {
+                Name = name,
+                IsBuiltInPreset = true,
+                SignatureEnabled = signature,
+                AllowInsecureHttp = insecureHttp,
+                AutoEnroll = autoEnroll
+            });
+        }
+    }
+
     /// <summary>
     /// 删除指定的命名配置。
     /// </summary>
@@ -896,6 +1044,25 @@ public class PluginSettings
             CurrentProfileName = SavedProfiles.FirstOrDefault()?.Name ?? "默认配置";
         }
         return true;
+    }
+
+    /// <summary>
+    /// 规范化证书指纹：只保留十六进制字符，统一转为大写。
+    /// </summary>
+    /// <remarks>
+    /// 用户可能从浏览器证书详情、openssl 输出或服务端日志里复制指纹，
+    /// 形态从 <c>AB:CD:EF…</c> 到 <c>abcdef…</c> 都有。
+    /// 这里一律压成大写无分隔符，比对时就不必再考虑这些差异。
+    /// </remarks>
+    internal static string NormalizeFingerprint(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "";
+        }
+
+        var hex = value.Where(Uri.IsHexDigit).ToArray();
+        return new string(hex).ToUpperInvariant();
     }
 
     /// <summary>

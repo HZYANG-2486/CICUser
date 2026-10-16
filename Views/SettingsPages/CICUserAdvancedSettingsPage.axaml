@@ -48,6 +48,32 @@
             <Setter Property="FontSize" Value="13"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
         </Style>
+
+        <!-- 分组卡片：与主界面保持同一套视觉语言，靠圆角与留白区分层级 -->
+        <Style Selector="Border.card">
+            <Setter Property="Padding" Value="20"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundAltHighBrush}"/>
+            <Setter Property="Margin" Value="0,0,0,18"/>
+        </Style>
+
+        <Style Selector="TextBlock.sectionTitle">
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+        </Style>
+
+        <!-- 卡片内的次级小节标题 -->
+        <Style Selector="TextBlock.subTitle">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+        </Style>
+
+        <!-- 疑难解答里的条目：比正文略重的强调 -->
+        <Style Selector="Expander.faq">
+            <Setter Property="Margin" Value="0,0,0,8"/>
+        </Style>
     </ci:SettingsPageBase.Styles>
 
     <!--
@@ -105,7 +131,7 @@
                     Click="BackButton_Click"/>
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="高级设置" FontSize="16" FontWeight="SemiBold"/>
-                <TextBlock Classes="hint" Text="上报频率、课表格式、报文模板与多套配置。修改后请点击底部「保存设置」。"/>
+                <TextBlock Classes="hint" Text="按用途分为八组：上报节奏、课表格式、报文模板、传输与安全、设备授权、配置管理、设备 ID、疑难解答。修改后请回主界面点「保存设置」。"/>
             </StackPanel>
         </StackPanel>
 
@@ -113,8 +139,9 @@
             <StackPanel MaxWidth="820" HorizontalAlignment="Left">
 
                 <!-- ══════════ 上报频率（三通道）══════════ -->
-                <Expander Header="上报频率（三种信息独立开关）" IsExpanded="True">
-                    <StackPanel Margin="0,10,0,4" Spacing="16">
+                <Border Classes="card">
+                    <StackPanel Spacing="16">
+                        <TextBlock Classes="sectionTitle" Text="上报节奏"/>
                         <TextBlock Classes="hint"
                                    Text="状态、课表、心跳三条通道各自独立，可分别关闭或设置发送间隔。心跳仅用于保活，不依赖课表状态，服务端据此判断设备是否在线。"/>
 
@@ -182,11 +209,12 @@
                                       Click="StrategyCheckBox_Click"/>
                         </StackPanel>
                     </StackPanel>
-                </Expander>
+                </Border>
 
                 <!-- ══════════ 课表发送格式 ══════════ -->
-                <Expander Header="课表发送格式" IsExpanded="False">
-                    <StackPanel Margin="0,10,0,4" Spacing="14">
+                <Border Classes="card">
+                    <StackPanel Spacing="14">
+                        <TextBlock Classes="sectionTitle" Text="课表发送格式"/>
                         <TextBlock Classes="hint"
                                    Text="选择课表内容在报文中的组织方式。默认的「按节次字典」与旧版本完全一致，升级后无需改动服务端。"/>
 
@@ -269,11 +297,12 @@
                                                  TextWrapping="Wrap" MaxHeight="200" Text="{}"/>
                         </Border>
                     </StackPanel>
-                </Expander>
+                </Border>
 
                 <!-- ══════════ 报文模板 ══════════ -->
-                <Expander Header="报文模板" IsExpanded="False">
-                    <StackPanel Margin="0,10,0,4">
+                <Border Classes="card">
+                    <StackPanel Spacing="14">
+                        <TextBlock Classes="sectionTitle" Text="报文模板"/>
                         <TextBlock Classes="hint" Margin="0,0,0,14"
                                    Text="自定义上报报文的字段。取值来源可选运行时变量（自动填充课堂数据）、固定文本或引用全局配置。"/>
 
@@ -432,59 +461,12 @@
                             </StackPanel>
                         </Border>
                     </StackPanel>
-                </Expander>
-
-                <!-- ══════════ 授权（可选，不强制）══════════ -->
-                <Expander Header="授权检查（可选）" IsExpanded="False">
-                    <StackPanel Margin="0,10,0,4" Spacing="14">
-                        <Border Classes="readout">
-                            <StackPanel Spacing="8">
-                                <CheckBox x:Name="AuthCheckEnabledCheckBox"
-                                          Content="启用授权检查"
-                                          Click="AuthCheckEnabledCheckBox_Click"/>
-                                <TextBlock Classes="hint" TextWrapping="Wrap"
-                                           Text="默认关闭。关闭时插件不做任何授权判断，直接向服务端上报，适用于未实现授权机制的服务端。开启后，只有服务端返回已授权才会发送数据。"/>
-                            </StackPanel>
-                        </Border>
-
-                        <Grid ColumnDefinitions="*,14,*">
-                            <StackPanel Grid.Column="0">
-                                <TextBlock Classes="fieldLabel" Text="授权申请接口路径"/>
-                                <TextBox x:Name="AuthRequestEndpointTextBox" FontSize="12"
-                                         Watermark="/class/api/auth/request"/>
-                            </StackPanel>
-                            <StackPanel Grid.Column="2">
-                                <TextBlock Classes="fieldLabel" Text="授权查询接口路径"/>
-                                <TextBox x:Name="AuthQueryEndpointTextBox" FontSize="12"
-                                         Watermark="/class/api/auth/query"/>
-                            </StackPanel>
-                        </Grid>
-
-                        <TextBlock Classes="fieldLabel" Text="授权请求体的字段名（按服务端约定改写）"
-                                   FontWeight="SemiBold"/>
-                        <Grid ColumnDefinitions="*,10,*,10,*">
-                            <StackPanel Grid.Column="0">
-                                <TextBlock Classes="fieldLabel" Text="设备ID"/>
-                                <TextBox x:Name="AuthDeviceIdFieldTextBox" FontSize="12"
-                                         Watermark="DeviceId"/>
-                            </StackPanel>
-                            <StackPanel Grid.Column="2">
-                                <TextBlock Classes="fieldLabel" Text="设备名称"/>
-                                <TextBox x:Name="AuthDeviceNameFieldTextBox" FontSize="12"
-                                         Watermark="DeviceName"/>
-                            </StackPanel>
-                            <StackPanel Grid.Column="4">
-                                <TextBlock Classes="fieldLabel" Text="班级名称"/>
-                                <TextBox x:Name="AuthClassNameFieldTextBox" FontSize="12"
-                                         Watermark="ClassName"/>
-                            </StackPanel>
-                        </Grid>
-                    </StackPanel>
-                </Expander>
+                </Border>
 
                 <!-- ══════════ 稳定性与安全性 ══════════ -->
-                <Expander Header="稳定性与安全性" IsExpanded="False">
-                    <StackPanel Margin="0,10,0,4" Spacing="14">
+                <Border Classes="card">
+                    <StackPanel Spacing="14">
+                        <TextBlock Classes="sectionTitle" Text="传输与安全"/>
                         <TextBlock Classes="hint"
                                    Text="网络异常与安全相关的参数。默认值适用于绝大多数校园内网环境。"/>
 
@@ -545,6 +527,27 @@
                                 <TextBlock x:Name="SignatureHintText" Classes="hint"
                                            TextWrapping="Wrap"
                                            Text="更换密钥后需在服务端同步更新，否则上报会被拒绝。若怀疑整份配置（含密钥）已经外泄，请同时重置设备ID 并在服务端删除旧设备记录。"/>
+
+                                <CheckBox x:Name="AutoEnrollCheckBox"
+                                          Content="缺少密钥时自动向服务端注册"/>
+                                <Grid ColumnDefinitions="Auto,*">
+                                    <Button Grid.Column="0" x:Name="AutoEnrollButton"
+                                            Content="立即注册" Height="34" Padding="14,0"
+                                            Click="AutoEnrollButton_Click"/>
+                                    <TextBlock Grid.Column="1" x:Name="EnrollmentStatusText"
+                                               Classes="hint" TextWrapping="Wrap"
+                                               VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </Grid>
+                                <TextBlock Classes="hint" TextWrapping="Wrap"
+                                           Text="注册会把本机新生成的密钥提交给服务端（仅此一次，之后密钥不再经过网络），因此必须使用 https:// 地址。服务端按「同一设备 + 同一密钥」判定为同一次注册，重试是安全的。"/>
+
+                                <TextBlock Classes="fieldLabel" Text="服务端证书指纹（自签证书时填写）"
+                                           Margin="0,4,0,0"/>
+                                <TextBox x:Name="CertificateFingerprintTextBox"
+                                         Watermark="SHA-256 指纹，可含冒号；留空则按系统信任链校验"
+                                         FontFamily="Cascadia Mono,Consolas,monospace"/>
+                                <TextBlock Classes="hint" TextWrapping="Wrap"
+                                           Text="留空时按系统信任链校验证书，适用于正式 CA 签发的证书，或已把自建 CA 根证书导入设备信任库的情形。填写后改为只认这一张证书，适合自签证书；可通过配置导出批量分发，注意证书轮换时需同步更新。"/>
                             </StackPanel>
                         </Border>
 
@@ -560,13 +563,79 @@
                             </StackPanel>
                         </Border>
                     </StackPanel>
-                </Expander>
+                </Border>
+
+                <!-- ══════════ 授权（可选，不强制）══════════ -->
+                <Border Classes="card">
+                    <StackPanel Spacing="14">
+                        <TextBlock Classes="sectionTitle" Text="设备授权检查（可选）"/>
+                        <Border Classes="readout">
+                            <StackPanel Spacing="8">
+                                <CheckBox x:Name="AuthCheckEnabledCheckBox"
+                                          Content="启用授权检查"
+                                          Click="AuthCheckEnabledCheckBox_Click"/>
+                                <TextBlock Classes="hint" TextWrapping="Wrap"
+                                           Text="默认关闭。关闭时插件不做任何授权判断，直接向服务端上报，适用于未实现授权机制的服务端。开启后，只有服务端返回已授权才会发送数据。"/>
+                            </StackPanel>
+                        </Border>
+
+                        <Grid ColumnDefinitions="*,14,*">
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Classes="fieldLabel" Text="授权申请接口路径"/>
+                                <TextBox x:Name="AuthRequestEndpointTextBox" FontSize="12"
+                                         Watermark="/class/api/auth/request"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Classes="fieldLabel" Text="授权查询接口路径"/>
+                                <TextBox x:Name="AuthQueryEndpointTextBox" FontSize="12"
+                                         Watermark="/class/api/auth/query"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock Classes="fieldLabel" Text="授权请求体的字段名（按服务端约定改写）"
+                                   FontWeight="SemiBold"/>
+                        <Grid ColumnDefinitions="*,10,*,10,*">
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Classes="fieldLabel" Text="设备ID"/>
+                                <TextBox x:Name="AuthDeviceIdFieldTextBox" FontSize="12"
+                                         Watermark="DeviceId"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Classes="fieldLabel" Text="设备名称"/>
+                                <TextBox x:Name="AuthDeviceNameFieldTextBox" FontSize="12"
+                                         Watermark="DeviceName"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="4">
+                                <TextBlock Classes="fieldLabel" Text="班级名称"/>
+                                <TextBox x:Name="AuthClassNameFieldTextBox" FontSize="12"
+                                         Watermark="ClassName"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
 
                 <!-- ══════════ 多套配置 ══════════ -->
-                <Expander Header="多套配置" IsExpanded="False">
-                    <StackPanel Margin="0,10,0,4">
+                <Border Classes="card">
+                    <StackPanel Spacing="14">
+                        <TextBlock Classes="sectionTitle" Text="配置管理"/>
                         <TextBlock Classes="hint" Margin="0,0,0,14"
                                    Text="可保存多套配置用于不同教室快速切换，也可导出为文件批量分发到其它设备。"/>
+
+                        <!-- 内置的三个版本预设：只切协议档位，不动连接参数 -->
+                        <Border Classes="readout" Margin="0,0,0,14">
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="内置的三个版本预设"
+                                           FontWeight="SemiBold"/>
+                                <TextBlock Classes="hint" TextWrapping="Wrap"
+                                           Text="它们只切换协议档位，不会改动服务器地址、班级名等连接参数。选中后点「应用」即可。"/>
+                                <TextBlock Classes="hint" TextWrapping="Wrap"
+                                           Text="① 兼容：纯设备码（无签名）— 不启用签名，服务端只凭设备ID 识别，对应最早期的服务端。"/>
+                                <TextBlock Classes="hint" TextWrapping="Wrap"
+                                           Text="② 兼容：手输密钥（明文 HTTP）— 启用签名但允许明文传输，密钥人工填写，对应已校验签名但尚未部署 TLS 的服务端。注意报文内容仍可能被同网段窃听。"/>
+                                <TextBlock Classes="hint" TextWrapping="Wrap"
+                                           Text="③ 推荐：自动注册（TLS）— 启用签名并要求 https，缺少密钥时设备自动注册领取，对应已部署证书的服务端。"/>
+                            </StackPanel>
+                        </Border>
 
                         <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,14">
                             <TextBlock Classes="fieldLabel" Text="当前配置" VerticalAlignment="Center" Margin="0"/>
@@ -588,11 +657,12 @@
                                     Padding="12,0" Click="OpenConfigFolderButton_Click"/>
                         </StackPanel>
                     </StackPanel>
-                </Expander>
+                </Border>
 
                 <!-- ══════════ 设备ID 高级 ══════════ -->
-                <Expander Header="设备ID 高级选项" IsExpanded="False">
-                    <StackPanel Margin="0,10,0,4" Spacing="14">
+                <Border Classes="card">
+                    <StackPanel Spacing="14">
+                        <TextBlock Classes="sectionTitle" Text="设备 ID 高级选项"/>
                         <StackPanel>
                             <TextBlock Classes="fieldLabel" Text="生成方式"/>
                             <ComboBox x:Name="DeviceIdSourceComboBox" Width="280"
@@ -625,7 +695,63 @@
                             </StackPanel>
                         </Border>
                     </StackPanel>
-                </Expander>
+                </Border>
+
+                <!-- ══════════ 新手疑难解答 ══════════ -->
+                <Border Classes="card">
+                    <StackPanel Spacing="12">
+                        <TextBlock Classes="sectionTitle" Text="新手疑难解答"/>
+                        <TextBlock Classes="hint"
+                                   Text="下面是最常见的几类问题。点开每一条查看原因与处理办法；若仍无解，请先打开「查看日志」看看具体报错。"/>
+
+                        <Expander Classes="faq" Header="上报一直失败，日志里是 401 / 403">
+                            <StackPanel Margin="0,6,0,0" Spacing="6">
+                                <TextBlock Classes="hint" Text="服务端不接受这台设备。按当前协议档位逐条排查："/>
+                                <TextBlock Classes="hint" Text="· 纯设备码档位 —— 服务端可能要求先申请授权，回主界面点「申请授权」。"/>
+                                <TextBlock Classes="hint" Text="· 手输密钥档位 —— 确认本机密钥与服务端登记的那份逐字相同，注意别夹带空格。"/>
+                                <TextBlock Classes="hint" Text="· 自动注册档位 —— 可能已被服务端吊销，到「传输与安全」看注册状态提示。"/>
+                            </StackPanel>
+                        </Expander>
+
+                        <Expander Classes="faq" Header="服务端完全收不到数据">
+                            <StackPanel Margin="0,6,0,0" Spacing="6">
+                                <TextBlock Classes="hint" Text="依次确认三件事：服务器地址是否正确（含端口与路径前缀）；接口路径是否与「报文模板」里的一致；用浏览器能否打开该地址。"/>
+                                <TextBlock Classes="hint" Text="若服务端只提供明文 HTTP，需要在「传输与安全」里开启「允许使用明文 HTTP 地址」。"/>
+                            </StackPanel>
+                        </Expander>
+
+                        <Expander Classes="faq" Header="改了服务器地址，好像没生效">
+                            <StackPanel Margin="0,6,0,0" Spacing="6">
+                                <TextBlock Classes="hint" Text="改完务必回主界面点「保存设置」。保存后地址立即生效，不需要重启宿主——早期版本确实要重启，现已修复。"/>
+                            </StackPanel>
+                        </Expander>
+
+                        <Expander Classes="faq" Header="课表报文格式和服务端对不上">
+                            <StackPanel Margin="0,6,0,0" Spacing="6">
+                                <TextBlock Classes="hint" Text="到「课表发送格式」切换预设。若服务端要的是「按节次数组」那种较老的形态，直接选对应预设即可，不必手改字段。"/>
+                            </StackPanel>
+                        </Expander>
+
+                        <Expander Classes="faq" Header="到底该选哪个协议档位？">
+                            <StackPanel Margin="0,6,0,0" Spacing="6">
+                                <TextBlock Classes="hint" Text="看服务端走到哪一步：只认设备ID 就选「纯设备码」；已校验签名但没上 TLS 就选「手输密钥」；已部署证书就选「自动注册」。三者在「配置管理」里一键切换。"/>
+                            </StackPanel>
+                        </Expander>
+
+                        <Expander Classes="faq" Header="日志在哪里？发出来排查要注意什么">
+                            <StackPanel Margin="0,6,0,0" Spacing="6">
+                                <TextBlock Classes="hint" Text="点「查看日志」直接打开。分享前建议在「传输与安全」里开启「日志中隐藏设备ID 与服务器地址」，敏感内容会被自动打码。"/>
+                            </StackPanel>
+                        </Expander>
+
+                        <Expander Classes="faq" Header="启用了请求签名，还要不要开「允许明文 HTTP」">
+                            <StackPanel Margin="0,6,0,0" Spacing="6">
+                                <TextBlock Classes="hint" Text="签名能防伪造，但不防窃听——明文 HTTP 下报文内容（班级名、课表）仍可能被同网段看到。服务端支持 https 时请务必改用 https 并关掉该开关。"/>
+                                <TextBlock Classes="hint" Text="注意：开启自动注册时，注册请求本身强制要求 https，与这个开关无关。"/>
+                            </StackPanel>
+                        </Expander>
+                    </StackPanel>
+                </Border>
 
                 <!-- 底部操作与提示 -->
                 <StackPanel Spacing="10" Margin="0,14,0,0">
